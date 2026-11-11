@@ -25,7 +25,7 @@ from core.regras import AtrasoOtd, EncaixeMaquinas, ReservaCarteira, TrocaEmbarq
 from core.regras.AtrasoOtd import calcular_atraso_otd, mapa_data_otd
 from core.regras.ConferenciaLimpeza import conferir_limpeza
 from core.regras.ConsumoInsumos import calcular_consumo
-from core.regras.EncaixeMaquinas import gerar_encaixe
+from core.regras.EncaixeMaquinas import NAO_QUEBRAR, PODE_QUEBRAR, gerar_encaixe
 from core.regras.LimpezaCtlrPedidos import eh_familia_valida, processar_dataframe_ctlr
 from core.regras.LimpezaDataframe import processar_dataframe_estoque
 from core.regras.LimpezaPlanejamento import filtrar_extrusao_stretch, processar_dataframe_planejamento
@@ -110,9 +110,10 @@ def etapa_encaixe(chave_reserva: tuple, chave_atraso: tuple, sig_plan, maquinas:
     stretch = etapa_planejamento(sig_plan)[1]
     mapa = mapa_data_otd(ctlr[['num_ped', 'num_prog', 'data_otd']]) if ctlr is not None else {}
     regras = montar_regras([dict(m) for m in maquinas])
-    rank = dict(chave_reserva[3])          # cadastro de formulações: não quebrar a sequência da máquina
+    rank = dict(chave_reserva[3])          # cadastro de formulações: sequência de formulação da máquina
+    opcao = PODE_QUEBRAR if int(dict(params).get("pode_quebrar_sequencia", 0)) else NAO_QUEBRAR   # regra 7
     return gerar_encaixe(stretch, reserva, regras, ListaPrioritarios([dict(l) for l in prioritarios]), mapa,
-                         rank=rank)
+                         rank=rank, opcao=opcao)
 
 
 @st.cache_resource(show_spinner="Calculando tubetes e pallets…", max_entries=4)

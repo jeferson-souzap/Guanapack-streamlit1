@@ -2,14 +2,24 @@
 import pandas as pd
 import streamlit as st
 
-from core import ui
+from core import contexto, ui
 
 c = ui.ctx()
 ui.cabecalho("Encaixe em máquinas",
              f"As {c.params['ordens_fixas']} primeiras OFs de cada máquina ficam fixas. "
-             "O pedido novo não quebra a sequência de formulação da máquina (só entra entre OFs cujo rank "
-             "comporta o dele; no fim da fila sempre pode), mesmo que fique atrasado. "
+             "Sequência de formulação pelo grupo de formulação da OF e o rank do cadastro: com NÃO QUEBRAR o pedido "
+             "novo só entra entre OFs cujo rank comporta o dele (no fim da fila sempre pode), mesmo que fique atrasado; "
+             "com PODE QUEBRAR ele entra no meio só se for preciso para atender o prazo ou não atrasar outra OF. "
              "Regras das máquinas e rank das formulações em Cadastros.", ("carteira", "estoque", "solicitacoes", "planejamento"))
+
+# Regra 7: a opção fica salva nos parâmetros; o encaixe roda as duas e mostra a outra nas colunas comparar_*
+opcoes = ["NÃO QUEBRAR", "PODE QUEBRAR"]
+atual = 1 if int(c.params.get("pode_quebrar_sequencia", 0)) else 0
+escolha = st.radio("Sequência de formulação", opcoes, index=atual, horizontal=True,
+                   help="As filas das máquinas seguem esta opção; as colunas comparar_* dos pedidos mostram a outra.")
+if opcoes.index(escolha) != atual:
+    contexto.salvar_parametro("pode_quebrar_sequencia", opcoes.index(escolha))
+    st.rerun()
 
 enc = ui.calcular(c.encaixe)
 if enc is None:

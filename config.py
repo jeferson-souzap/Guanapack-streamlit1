@@ -85,6 +85,8 @@ PARAMETROS = {
         Parametro("tolerancia_micra", 2.0, "float", "Micra aceita no alternativo (± micra)", "Reserva"),
         Parametro("max_degraus_formulacao", 1, "int", "Degraus que o alternativo pode subir no rank de formulação", "Reserva"),
         Parametro("ordens_fixas", 3, "int", "Primeiras OFs de cada máquina que não mudam de lugar no encaixe", "Encaixe"),
+        Parametro("pode_quebrar_sequencia", 0, "int", "Sequência de formulação no encaixe: 0 = NÃO QUEBRAR, 1 = PODE QUEBRAR "
+                  "(só quando é preciso para atender o prazo ou não atrasar outra OF)", "Encaixe"),
         Parametro("dias_slow_move", 90, "int", "Pallet parado há mais de N dias conta como slow move (indicador)", "Estoque"),
         Parametro("dias_tolerancia_relatorio", 0, "int", "Relatório salvo há mais de N dias recebe aviso (0 = só hoje passa)", "Relatórios"),
     ]

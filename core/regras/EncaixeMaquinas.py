@@ -1,5 +1,5 @@
 """
-Encaixe em máquina dos pedidos sem estoque (mesmas regras do modEncaixe da planilha Excel, rev028).
+Encaixe em máquina dos pedidos sem estoque (mesmas regras do modEncaixe da planilha Excel, rev030).
 
 Entradas: o planejamento das extrusoras de stretch (fila atual de cada máquina), a reserva da
 carteira (pedidos com tem_estoque = "NÃO"), as regras das máquinas, a lista de clientes
@@ -27,9 +27,14 @@ Regras (combinadas com o usuário em 09 e 10/11/2026):
    rank do cadastro de formulações: FM 1, MN 2, MO 3, F03 4, QUANTUM 5, STIFF 6), e o pedido só
    entra entre duas OFs se o nível dele estiver entre o das duas (subida e descida de formulação):
    entre MN e MN só MN; entre MN e MO, MN ou MO; entre FM e MO, só MN. No fim da fila sempre pode.
-   OF sem formulação no relatório conta como da mesma formulação da OF anterior.
    Entre as posições que atendem o prazo sem fazer outras OFs atrasarem, prefere a que fica ao lado
    de OF da mesma formulação (critério novo do passo 4, logo depois de "menos OFs passam a atrasar").
+   (rev030) O nível da OF vem do grupo_form do planejamento (sempre preenchido); só se ele estiver
+   vazio usa a formulacao e, se as duas estiverem vazias, a da OF anterior.
+7. Opção do usuário (rev030): NÃO QUEBRAR (padrão, regra 6) ou PODE QUEBRAR (o pedido pode entrar no
+   meio de uma sequência, mas só quando isso é preciso para atender o prazo ou para não fazer outra OF
+   atrasar; havendo posição igual sem quebrar, fica com ela). gerar_encaixe roda as duas: as filas
+   seguem a opção escolhida e a tabela de pedidos traz as colunas comparar_* com a outra.
 """
 import re
 from dataclasses import dataclass, field
@@ -49,6 +54,14 @@ NOVO = "NOVO NA MÁQUINA"
 OF_ESTOQUE = "OF DE ESTOQUE"
 SEM_MAQUINA = "SEM MÁQUINA"
 
+NAO_QUEBRAR = "NÃO QUEBRAR"      # regra 7: opções da sequência de formulação
+PODE_QUEBRAR = "PODE QUEBRAR"
+OPCOES_SEQUENCIA = (NAO_QUEBRAR, PODE_QUEBRAR)
+
+
+def outra_opcao(opcao: str) -> str:
+    return NAO_QUEBRAR if opcao == PODE_QUEBRAR else PODE_QUEBRAR
+
 
 @dataclass
 class Item:
@@ -63,6 +76,8 @@ class Item:
     id_pa: str = ""
     produto: str = ""
     formulacao: str = ""
+    grupo_form: str = ""                   # grupo_form do planejamento; pedido novo: formulação da carteira
+    quebra: bool = False                   # pedido novo que entrou no meio de uma sequência (PODE QUEBRAR)
     qtde: float = 0.0
     ini0: pd.Timestamp | None = None
     fim0: pd.Timestamp | None = None
@@ -97,6 +112,7 @@ class Pedido:
     item: Item | None = None
     bloqueios: list = field(default_factory=list)
     passam_atrasar: str = ""
+    quebra: bool = False
 
 
 @dataclass
@@ -115,6 +131,7 @@ class Opcao:
     kgh: float = 0.0
     taxa_origem: str = ""
     mesma_formulacao: bool = False   # fica ao lado de OF da mesma formulação (não cria troca de formulação)
+    quebra: bool = False             # entra no meio de uma sequência de formulação (só com PODE QUEBRAR)
 
 
 def _texto(valor) -> str:
@@ -184,9 +201,10 @@ def chave_pedido(pedido, prog) -> str:
 class Encaixe:
     def __init__(self, plan: pd.DataFrame, reserva: pd.DataFrame, regras: list[dict],
                  prioritarios: ListaPrioritarios | None = None, mapa_otd: dict | None = None, agora=None,
-                 rank: dict | None = None):
+                 rank: dict | None = None, pode_quebrar: bool = False):
         self.regras = regras
         self.rank = dict(rank or {})       # formulação -> nível (vazio = não confere a sequência)
+        self.pode_quebrar = pode_quebrar   # regra 7
         self.prioritarios = prioritarios or ListaPrioritarios([])
         self.mapa_otd = mapa_otd or {}
         self.agora = pd.Timestamp(agora) if agora is not None else pd.Timestamp.now()
@@ -218,7 +236,7 @@ class Encaixe:
             it = Item(maq=m, id_of=_texto(r["id_of"]), firmado=_texto(r.get("firmado")),
                       pedido=_texto(r["pedido"]), prog=_texto(r["seq_prog"]), cliente=_texto(r.get("cliente")),
                       id_pa=_texto(r["id_pa"]), produto=_texto(r["produto"]), formulacao=_texto(r.get("formulacao")),
-                      qtde=_num(r["qtde_of"]), ini0=pd.Timestamp(ini), fim0=pd.Timestamp(fim),
+                      grupo_form=_texto(r.get("grupo_form")), qtde=_num(r["qtde_of"]), ini0=pd.Timestamp(ini), fim0=pd.Timestamp(fim),
                       ini=pd.Timestamp(ini), fim=pd.Timestamp(fim))
             if it.pedido:
                 chave = chave_pedido(it.pedido, it.prog)
@@ -346,10 +364,15 @@ class Encaixe:
                      atrasos=", ".join(self.nome(it) for it in atrasados), junto=junto,
                      empurra=n - pos + 1, prioritario=p.prioritario)
 
+    def nivel_do_item(self, it: Item) -> int | None:
+        """Nível de uma OF: grupo_form (rev030); se vazio ou fora do cadastro, a formulacao."""
+        nivel = nivel_formulacao(it.grupo_form, self.rank)
+        return nivel if nivel is not None else nivel_formulacao(it.formulacao, self.rank)
+
     def niveis_da_fila(self, m: int) -> list[int | None]:
-        """Nível de formulação de cada OF da fila; OF sem formulação fica com o da anterior
-        (as do começo da fila sem formulação ficam com o da 1ª que tem)."""
-        niveis = [nivel_formulacao(it.formulacao, self.rank) for it in self.filas[m]]
+        """Nível de formulação de cada OF da fila; OF sem grupo e sem formulação fica com o da
+        anterior (as do começo da fila ficam com o da 1ª que tem)."""
+        niveis = [self.nivel_do_item(it) for it in self.filas[m]]
         ultimo = None
         for j, n in enumerate(niveis):
             if n is None:
@@ -385,13 +408,19 @@ class Encaixe:
             return a.n_atrasos_prior < b.n_atrasos_prior
         if a.atende != b.atende:
             return a.atende
+        # regra 7 (PODE QUEBRAR): quebrar só quando é preciso para atender o prazo ou para não
+        # fazer outra OF atrasar (com NÃO QUEBRAR nenhuma opção quebra)
         if a.atende and a.prioritario:                     # prioritário: o mais cedo possível
+            if a.quebra != b.quebra:
+                return not a.quebra
             if a.fim != b.fim:
                 return a.fim < b.fim
             return a.n_atrasos < b.n_atrasos
         if a.atende:
             if a.n_atrasos != b.n_atrasos:
                 return a.n_atrasos < b.n_atrasos
+            if a.quebra != b.quebra:
+                return not a.quebra
             if a.mesma_formulacao != b.mesma_formulacao:      # regra 6: evita troca de formulação a mais
                 return a.mesma_formulacao
             if a.junto != b.junto:
@@ -399,6 +428,8 @@ class Encaixe:
             if a.empurra != b.empurra:
                 return a.empurra < b.empurra
             return a.fim < b.fim
+        if a.quebra != b.quebra:
+            return not a.quebra
         if a.fim != b.fim:
             return a.fim < b.fim
         if a.n_atrasos != b.n_atrasos:
@@ -424,10 +455,11 @@ class Encaixe:
             ult_fixa = max((j + 1 for j, it in enumerate(fila) if it.fixa), default=0)
             niveis = self.niveis_da_fila(m)
             for pos in range(ult_fixa + 1, len(fila) + 2):
-                if self.quebra_sequencia(niveis, pos, nivel):
+                quebra = self.quebra_sequencia(niveis, pos, nivel)
+                if quebra and not self.pode_quebrar:
                     continue                               # regra 6: não entra no meio da sequência
                 op = self.avaliar_posicao(m, pos, dur, limite, p)
-                op.kgh, op.taxa_origem = kgh, origem
+                op.kgh, op.taxa_origem, op.quebra = kgh, origem, quebra
                 op.mesma_formulacao = nivel is not None and (
                     (pos > 1 and niveis[pos - 2] == nivel) or (pos <= len(niveis) and niveis[pos - 1] == nivel))
                 if self.melhor_que(op, melhor):
@@ -442,12 +474,13 @@ class Encaixe:
             it.ini += dur
             it.fim += dur
         novo = Item(maq=melhor.maq, novo=True, pedido=p.num_pedido, prog=p.prog, cliente=p.cliente,
-                    id_pa=p.id_pa, produto=p.produto, formulacao=p.formulacao, qtde=p.qtde,
+                    id_pa=p.id_pa, produto=p.produto, formulacao=p.formulacao, grupo_form=p.formulacao,
+                    quebra=melhor.quebra, qtde=p.qtde,
                     ini=melhor.ini, fim=melhor.fim, prazo=limite, kgh=melhor.kgh,
                     taxa_origem=melhor.taxa_origem, prioritario=p.prioritario)
         self.itens.append(novo)
         fila.insert(melhor.pos - 1, novo)
-        p.tipo, p.item, p.passam_atrasar = NOVO, novo, melhor.atrasos
+        p.tipo, p.item, p.passam_atrasar, p.quebra = NOVO, novo, melhor.atrasos, melhor.quebra
 
     def executar(self):
         for p in self.pedidos:
@@ -466,7 +499,8 @@ class Encaixe:
                      "depois_de": None, "inicio_previsto": None, "fim_previsto": None, "atende_embarque": None,
                      "kg_h": None, "kg_h_origem": None, "ofs_que_passam_a_atrasar": p.passam_atrasar or None,
                      "maquinas_que_nao_rodam": " | ".join(p.bloqueios) or None,
-                     "cliente_prioritario": "SIM" if p.prioritario else None}
+                     "cliente_prioritario": "SIM" if p.prioritario else None,
+                     "quebra_sequencia": "SIM" if p.tipo == NOVO and p.quebra else None}
             it = p.item
             if it is not None:
                 linha.update(maquina=self.regras[it.maq]["apelido"], inicio_previsto=it.ini, fim_previsto=it.fim,
@@ -484,6 +518,7 @@ class Encaixe:
     def tabela_filas(self) -> pd.DataFrame:
         linhas = []
         for m, fila in enumerate(self.filas):
+            niveis = self.niveis_da_fila(m)
             for j, it in enumerate(fila, start=1):
                 atraso = None
                 if it.prazo is not None:
@@ -497,12 +532,16 @@ class Encaixe:
                     observacao = "atende os pedidos sem estoque " + ", ".join(it.atende_pedidos)
                 if it.novo:
                     observacao = f"kg/h {round(it.kgh)} ({it.taxa_origem})"
+                    if it.quebra:
+                        observacao += " | QUEBRA a sequência de formulação"
                 linhas.append({
                     "maquina": self.regras[m]["apelido"], "seq": j,
                     "situacao": "NOVO" if it.novo else ("FIXA" if it.fixa else None),
                     "id_of": None if it.novo else it.id_of, "firmado": it.firmado or None,
                     "pedido": it.pedido or None, "prog": it.prog or None, "cliente": it.cliente or None,
-                    "id_pa": it.id_pa, "produto": it.produto, "formulacao": it.formulacao, "qtde_kg": it.qtde,
+                    "id_pa": it.id_pa, "produto": it.produto, "formulacao": it.formulacao,
+                    "grupo_formulacao": (it.grupo_form or it.formulacao) or None,
+                    "nivel_formulacao": niveis[j - 1], "qtde_kg": it.qtde,
                     "inicio_atual": None if it.novo else it.ini0, "fim_atual": None if it.novo else it.fim0,
                     "inicio_sugerido": it.ini, "fim_sugerido": it.fim,
                     "empurrado_h": None if it.novo else round((it.ini - it.ini0).total_seconds() / 3600, 1),
@@ -512,17 +551,64 @@ class Encaixe:
                 })
         return pd.DataFrame(linhas)
 
+    def resumo_novos(self) -> str:
+        novos = [p for p in self.pedidos if p.tipo == NOVO]
+        atendem = sum(1 for p in novos if p.item.fim < self.prazo_do_pedido(p))
+        quebram = sum(1 for p in novos if p.quebra)
+        sem = sum(1 for p in self.pedidos if p.tipo == SEM_MAQUINA)
+        extra = f", {quebram} {'quebra' if quebram == 1 else 'quebram'} a sequência" if quebram else ""
+        return f"novos na máquina: {len(novos)} ({atendem} atendem o embarque{extra}) | sem máquina: {sem}"
+
     def resumo(self) -> str:
         novos = [p for p in self.pedidos if p.tipo == NOVO]
         atendem = sum(1 for p in novos if p.item.fim < self.prazo_do_pedido(p))
+        quebram = sum(1 for p in novos if p.quebra)
         estoque = sum(1 for p in self.pedidos if p.tipo == OF_ESTOQUE)
         sem = sum(1 for p in self.pedidos if p.tipo == SEM_MAQUINA)
-        return (f"{len(self.pedidos)} pedidos sem estoque | novos na máquina: {len(novos)} ({atendem} atendem o embarque)"
+        opcao = PODE_QUEBRAR if self.pode_quebrar else NAO_QUEBRAR
+        extra = f", {quebram} {'quebra' if quebram == 1 else 'quebram'} a sequência" if quebram else ""
+        return (f"{len(self.pedidos)} pedidos sem estoque | {opcao} a sequência de formulação | "
+                f"novos na máquina: {len(novos)} ({atendem} atendem o embarque{extra})"
                 f" | por OF de estoque: {estoque} | sem máquina: {sem}")
 
 
-def gerar_encaixe(plan, reserva, regras, prioritarios=None, mapa_otd=None, agora=None, rank=None):
+def _comparar(pedidos: pd.DataFrame, outra: "Encaixe", opcao_outra: str) -> tuple[pd.DataFrame, int]:
+    """Colunas comparar_* (regra 7): o resultado do mesmo pedido na outra opção."""
+    tab = outra.tabela_pedidos()
+    if pedidos.empty:
+        return pedidos, 0
+    ref = {chave_pedido(r.num_pedido, r.prog): r for r in tab.itertuples()}
+    cols = {"comparar_opcao": [], "comparar_sugestao": [], "comparar_maquina": [],
+            "comparar_fim_previsto": [], "comparar_atende_embarque": []}
+    difere = 0
+    for r in pedidos.itertuples():
+        o = ref.get(chave_pedido(r.num_pedido, r.prog))
+        cols["comparar_opcao"].append(opcao_outra)
+        if o is None:
+            for c in list(cols)[1:]:
+                cols[c].append(None)
+            continue
+        cols["comparar_sugestao"].append(o.sugestao + (" (quebra a sequência)" if o.quebra_sequencia == "SIM" else ""))
+        cols["comparar_maquina"].append(o.maquina)
+        cols["comparar_fim_previsto"].append(o.fim_previsto)
+        cols["comparar_atende_embarque"].append(o.atende_embarque)
+        if (r.atende_embarque or "") != (o.atende_embarque or "") or (r.maquina or "") != (o.maquina or ""):
+            difere += 1
+    return pedidos.assign(**cols), difere
+
+
+def gerar_encaixe(plan, reserva, regras, prioritarios=None, mapa_otd=None, agora=None, rank=None,
+                  opcao: str = NAO_QUEBRAR):
     """Roda o encaixe e devolve (pedidos, filas, resumo). rank = {formulação: rank} do cadastro de
-    formulações, para não quebrar a sequência de formulação das máquinas (regra 6)."""
-    enc = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank).executar()
-    return enc.tabela_pedidos(), enc.tabela_filas(), enc.resumo()
+    formulações, para não quebrar a sequência de formulação das máquinas (regra 6).
+    opcao = NÃO QUEBRAR / PODE QUEBRAR (regra 7): roda também a outra opção, que vai nas colunas
+    comparar_* da tabela de pedidos e no fim do resumo."""
+    opcao = PODE_QUEBRAR if str(opcao).strip().upper() == PODE_QUEBRAR else NAO_QUEBRAR
+    outra = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank,
+                    pode_quebrar=(outra_opcao(opcao) == PODE_QUEBRAR)).executar()
+    enc = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank,
+                  pode_quebrar=(opcao == PODE_QUEBRAR)).executar()
+    pedidos, difere = _comparar(enc.tabela_pedidos(), outra, outra_opcao(opcao))
+    resumo = (f"{enc.resumo()} || comparação, {outra_opcao(opcao)}: {outra.resumo_novos()} "
+              f"({difere} pedidos mudam)")
+    return pedidos, enc.tabela_filas(), resumo

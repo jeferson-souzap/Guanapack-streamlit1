@@ -156,3 +156,42 @@ def test_of_sem_formulacao_conta_como_a_anterior():
     ofs = [of_form(i, 10 * i, f) for i, f in enumerate(forms)]
     pedidos, _, _ = encaixar_seq(ofs, [ped(1, "2026-11-12", formulacao="MO 300%")])
     assert pedidos.iloc[0].depois_de == "OF 5"                 # as OFs 4 e 5 (sem formulação) são do bloco MN
+
+
+# ----- rev030: grupo_form, opção PODE QUEBRAR (regra 7) e grupo nas filas -----
+def encaixar_opcao(ofs, pedidos, opcao):
+    return gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame(pedidos), REGRAS, None, {}, agora=INICIO, rank=RANK, opcao=opcao)
+
+
+def test_nivel_vem_do_grupo_form_antes_da_formulacao():
+    # formulação do relatório errada/vazia, grupo_form certo: vale o grupo
+    forms = ["MN 250%"] * 4 + [None, "FM 150% Nacional (pcp Firmar)", "MO 300%"]
+    ofs = [of_form(i, 10 * i, f) for i, f in enumerate(forms)]
+    for o, g in zip(ofs, ["MN 250%"] * 4 + ["MO 300%", "MO 300%", "MO 300%"]):
+        o["grupo_form"] = g
+    pedidos, filas, _ = encaixar_seq(ofs, [ped(1, "2026-11-12", formulacao="MO 300%")])
+    assert pedidos.iloc[0].depois_de == "OF 3"                 # entre o último MN (OF 3) e o 1º MO (OF 4)
+    assert list(filas.grupo_formulacao[:3]) == ["MN 250%"] * 3 and filas.nivel_formulacao.iloc[0] == 2
+
+
+def test_pode_quebrar_so_quando_precisa_para_o_prazo():
+    ofs = [of_form(i, 10 * i, "MN 250%") for i in range(7)]
+    pedidos, filas, resumo = encaixar_opcao(ofs, [ped(1, "2026-11-14", formulacao="MO 300%")], "PODE QUEBRAR")
+    p = pedidos.iloc[0]
+    # quebra na posição que cumpre o prazo e empurra menos OFs (antes da última)
+    assert p.depois_de == "OF 5" and p.atende_embarque == "SIM" and p.quebra_sequencia == "SIM"
+    assert p.comparar_opcao == "NÃO QUEBRAR" and p.comparar_atende_embarque == "NÃO"
+    assert "QUEBRA" in filas[filas.situacao == "NOVO"].observacao.iloc[0]
+    assert "1 quebra a sequência" in resumo and "1 pedidos mudam" in resumo
+    # com prazo folgado não quebra: vai para o fim, como no NÃO QUEBRAR
+    pedidos, _, _ = encaixar_opcao(ofs, [ped(1, "2026-12-30", formulacao="MO 300%")], "PODE QUEBRAR")
+    assert pedidos.iloc[0].depois_de == "OF 6" and pd.isna(pedidos.iloc[0].quebra_sequencia)
+
+
+def test_nao_quebrar_e_o_padrao_e_compara_com_a_outra():
+    ofs = [of_form(i, 10 * i, "MN 250%") for i in range(7)]
+    pedidos, _, resumo = encaixar_seq(ofs, [ped(1, "2026-11-14", formulacao="MO 300%")])
+    p = pedidos.iloc[0]
+    assert p.depois_de == "OF 6" and p.comparar_opcao == "PODE QUEBRAR"
+    assert p.comparar_atende_embarque == "SIM" and "quebra a sequência" in p.comparar_sugestao
+    assert resumo.startswith("1 pedidos sem estoque | NÃO QUEBRAR")
