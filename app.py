@@ -9,7 +9,7 @@ locais por usuário/PC, parâmetros, histórico, anotações e auditoria.
 import streamlit as st
 
 import core  # noqa: F401  (ajusta o pandas antes de tudo)
-from core import contexto, db, pipeline, ui
+from core import contexto, db, pipeline, ui, versao
 from modulos import MODULOS
 
 st.set_page_config(page_title="Guanapack PCP", layout="wide")
@@ -23,6 +23,11 @@ def _iniciar_banco():
     except OSError:
         pass
     return True
+
+
+@st.cache_resource(show_spinner=False)
+def _versao():
+    return versao.ler()
 
 
 _iniciar_banco()
@@ -63,5 +68,10 @@ with st.sidebar:
                  help="Apaga o cache e lê de novo os arquivos da pasta (use se trocou um relatório com o mesmo horário)"):
         pipeline.limpar_cache()
         st.rerun()
+    v = _versao()
+    st.divider()
+    st.caption(f"{v.texto}  \n{v.mensagem}  \napp iniciado em {v.iniciado_em:%d/%m/%Y %H:%M} (Brasília)",
+               help="Commit do git em uso. Muda a cada deploy novo; 'alterações locais' = há mudanças "
+                    "neste computador ainda não commitadas.")
 
 navegacao.run()
