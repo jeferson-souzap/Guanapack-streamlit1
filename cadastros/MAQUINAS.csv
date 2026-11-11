@@ -1,0 +1,4 @@
+maquina;formulacoes;nao_roda;micra_min;micra_max;peso_min;peso_max;tubete_min;tubete_max;largura_min;largura_max;observacao
+GNP - Extrusora ST 01 (Davis);FM, MN, MO, UV;CORELESS, MANUAL, PCR, STIFF;17;40;9,5;50;0,9;2;500;500;Regra: micra (16*)-17 a 40. O 16 com asterisco ficou de fora. Largura: a regra não fala, no relatório a Davis só roda 500.
+GNP - Extrusora ST 02 (SML 1);FM, MN, MO, STIFF, PCR;JUMBO, QUANTUM;8;40;2,38;18;0,38;2;500;500;Regra: peso 2,38 a 18 kg*. O asterisco não está explicado, ficou 18. Coreless sem tubete. Formulação QUANTUM só na Power (decisão de 09/11/2026). Largura: no relatório só 500.
+GNP - Extrusora ST 03 (Power);FM, MN, MO, QUANTUM, STIFF, PRE-ESTIRADO;CORELESS, PCR;8;40;2,38;50;0,38;2;450;1000;Largura: a regra não fala, no relatório a Power roda de 450 a 1000.

@@ -1,0 +1,6 @@
+cliente;material;formulacao;observacao
+Lactalis;;QUANTUM;Exemplo do usuário: Lactalis - Quantum
+Braskem;;QUANTUM;Exemplo do usuário: Braskem - Quantum
+Cervejaria Petropolis - Boituva;;;Exemplo do usuário: Cervejaria Petrópolis de Boituva
+HNK;;;Exemplo do usuário: Hnk (no estoque aparece HNK - PONTA GROSSA)
+Heineken;;;Incluído junto com HNK: na carteira e no planejamento aparece Heineken (ex.: Heineken - Igrejinha). Apague se não for o mesmo cliente.
