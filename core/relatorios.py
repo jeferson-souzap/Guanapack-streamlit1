@@ -6,6 +6,8 @@ hoje?). A leitura fica em cache pela "assinatura" do arquivo (caminho + data de 
 tamanho): enquanto o .xls não muda, o app não lê de novo; quando alguém salva um relatório novo,
 a próxima consulta já usa o novo.
 """
+import io
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -92,6 +94,52 @@ def conferir(chave: str, pasta: Path | None = None, tolerancia_dias: int = 0) ->
     if dias > tolerancia_dias:
         return {**base, "situacao": "AVISO", "mensagem": f"salvo {quando} ({salvo:%d/%m/%Y %H:%M}); confira se é a versão atual"}
     return {**base, "situacao": "OK", "mensagem": f"salvo {quando} às {salvo:%H:%M}"}
+
+
+# ===================================================================== envio pelo navegador
+
+def colunas_do_conteudo(conteudo: bytes) -> list[str] | None:
+    try:
+        return [str(c).strip() for c in pd.read_excel(io.BytesIO(conteudo), nrows=0).columns]
+    except Exception:
+        return None
+
+
+def identificar(nome: str, conteudo: bytes) -> str | None:
+    """Qual relatório é o arquivo enviado: pelo nome (o configurado ou o padrão) ou, se não bater,
+    pelas colunas. Devolve a chave ou None."""
+    nome = Path(nome).name.lower()
+    nomes = contexto.arquivos_relatorios()
+    for chave, rel in config.RELATORIOS.items():
+        if nome in (nomes[chave].lower(), rel.arquivo.lower()):
+            return chave
+    colunas = colunas_do_conteudo(conteudo)
+    if not colunas:
+        return None
+    candidatos = [r for r in config.RELATORIOS.values() if set(r.colunas) <= set(colunas)]
+    # o que exige mais colunas é o mais específico
+    candidatos.sort(key=lambda r: len(r.colunas), reverse=True)
+    return candidatos[0].chave if candidatos else None
+
+
+def salvar_enviado(chave: str, conteudo: bytes) -> Path:
+    """Grava o relatório na pasta dos enviados com o nome configurado (troca o anterior)."""
+    pasta = config.PASTA_ENVIADOS
+    pasta.mkdir(parents=True, exist_ok=True)
+    destino = pasta / contexto.arquivos_relatorios()[chave]
+    temporario = destino.with_name(destino.name + ".tmp")
+    temporario.write_bytes(conteudo)
+    os.replace(temporario, destino)
+    return destino
+
+
+def apagar_enviado(chave: str) -> bool:
+    p = config.PASTA_ENVIADOS / contexto.arquivos_relatorios()[chave]
+    try:
+        p.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def conferir_todos(pasta: Path | None = None, tolerancia_dias: int = 0) -> dict[str, dict]:

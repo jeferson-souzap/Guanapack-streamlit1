@@ -21,6 +21,8 @@ class Modulo:
 
 MODULOS = [
     Modulo("inicio", "Início", None, "modulos/inicio.py", "", "Situação dos relatórios e resumo do dia", fixo=True),
+    Modulo("enviar", "Enviar relatórios", None, "modulos/enviar.py", "",
+           "Enviar os relatórios do ERP pelo navegador (app na nuvem)", fixo=True),
     Modulo("consulta", "Consulta de pedido", None, "modulos/consulta.py", "Operação",
            "Tudo sobre um pedido em uma tela, com anotações"),
     Modulo("pedidos", "Pedidos e OTD", None, "modulos/pedidos.py", "Operação",

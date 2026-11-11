@@ -8,6 +8,9 @@ Pasta dos relatórios, na ordem:
 4. local salvo para este usuário em qualquer PC (pc = "*");
 5. local geral (usuario = "*", pc = "*");
 6. config.PASTA_PADRAO.
+
+Se a pasta escolhida (itens 2 a 6) não existe neste computador (ex.: app na nuvem, sem o drive G:),
+usa config.PASTA_ENVIADOS, onde ficam os relatórios enviados pelo navegador.
 """
 import getpass
 import os
@@ -35,6 +38,25 @@ def pasta_relatorios() -> tuple[Path, str]:
     """(pasta, de onde veio) para o usuário e o PC atuais."""
     if os.environ.get(config.VAR_PASTA):
         return Path(os.environ[config.VAR_PASTA]), f"variável de ambiente {config.VAR_PASTA}"
+    pasta, origem = _pasta_configurada()
+    try:
+        existe = pasta.is_dir()
+    except OSError:
+        existe = False
+    if not existe:
+        return config.PASTA_ENVIADOS, f"relatórios enviados pelo navegador; a pasta {pasta} não existe aqui"
+    return pasta, origem
+
+
+def usando_enviados() -> bool:
+    """True quando o app está lendo os relatórios enviados pelo navegador."""
+    try:
+        return pasta_relatorios()[0].resolve() == config.PASTA_ENVIADOS.resolve()
+    except OSError:
+        return False
+
+
+def _pasta_configurada() -> tuple[Path, str]:
     u, p = usuario(), pc()
     tentativas = [((u, p), "salva para você neste PC"), (("*", p), "salva para este PC"),
                   ((u, "*"), "salva para você (qualquer PC)"), (("*", "*"), "local geral")]

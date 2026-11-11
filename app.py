@@ -57,6 +57,8 @@ with st.sidebar:
         for s in c.situacao.values():
             st.markdown(f"{ui.ICONE_SITUACAO[s['situacao']]} **{s['titulo']}**  \n"
                         f"<small>{s['mensagem']}</small>", unsafe_allow_html=True)
+        if contexto.usando_enviados():
+            st.page_link("modulos/enviar.py", label="Enviar relatórios", icon=":material/upload:")
     if st.button("Reler relatórios", width="stretch",
                  help="Apaga o cache e lê de novo os arquivos da pasta (use se trocou um relatório com o mesmo horário)"):
         pipeline.limpar_cache()

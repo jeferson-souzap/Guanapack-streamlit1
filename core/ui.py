@@ -30,7 +30,8 @@ def cabecalho(titulo: str, descricao: str = "", relatorios: tuple = ()):
     for chave in relatorios:
         s = c.situacao[chave]
         if s["situacao"] == "ERRO":
-            st.error(f"**{s['titulo']}** ({s['arquivo']}): {s['mensagem']}.  \nPasta: `{c.pasta}`")
+            st.error(f"**{s['titulo']}** ({s['arquivo']}): {s['mensagem']}.  \nPasta: `{c.pasta}` "
+                     f"(se o app está na nuvem, use **Enviar relatórios**)")
         elif s["situacao"] == "AVISO":
             st.warning(f"**{s['titulo']}**: {s['mensagem']}.")
 
@@ -40,7 +41,8 @@ def calcular(func, *args):
     try:
         return func(*args)
     except FaltaRelatorio as e:
-        st.info(f"Não dá para calcular agora: {e}. Confira a pasta em **Configuração**.")
+        st.info(f"Não dá para calcular agora: {e}. Envie o relatório em **Enviar relatórios** "
+                f"ou confira a pasta em **Configuração**.")
     except Exception as e:  # erro de regra: mostra sem derrubar o app
         st.error(f"Erro no cálculo: {e}")
         with st.expander("Detalhes técnicos"):

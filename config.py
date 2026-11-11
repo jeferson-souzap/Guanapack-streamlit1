@@ -31,6 +31,10 @@ LOCAIS_INICIAIS = {
     ("*", "*"): PASTA_PADRAO,
 }
 
+# Relatórios enviados pelo navegador (módulo "Enviar relatórios"). É a pasta usada quando a pasta
+# configurada não existe no computador onde o app roda (ex.: na nuvem, sem o drive G:).
+PASTA_ENVIADOS = DADOS_DIR / "enviados"
+
 # Variável de ambiente que passa por cima de tudo (útil para testar com outra pasta)
 VAR_PASTA = "PCP_REPORTS_DIR"
 
