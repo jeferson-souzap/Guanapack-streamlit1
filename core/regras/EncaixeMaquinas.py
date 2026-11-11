@@ -201,10 +201,14 @@ def chave_pedido(pedido, prog) -> str:
 class Encaixe:
     def __init__(self, plan: pd.DataFrame, reserva: pd.DataFrame, regras: list[dict],
                  prioritarios: ListaPrioritarios | None = None, mapa_otd: dict | None = None, agora=None,
-                 rank: dict | None = None, pode_quebrar: bool = False):
+                 rank: dict | None = None, pode_quebrar: bool = False,
+                 ordens_fixas: int | None = None, fator_kgh: float = 1.0):
         self.regras = regras
         self.rank = dict(rank or {})       # formulação -> nível (vazio = não confere a sequência)
         self.pode_quebrar = pode_quebrar   # regra 7
+        # simulação: quantas OFs ficam fixas e ajuste do kg/h (1.0 = mediana do relatório)
+        self.ordens_fixas = ORDENS_FIXAS if ordens_fixas is None else int(ordens_fixas)
+        self.fator_kgh = float(fator_kgh)
         self.prioritarios = prioritarios or ListaPrioritarios([])
         self.mapa_otd = mapa_otd or {}
         self.agora = pd.Timestamp(agora) if agora is not None else pd.Timestamp.now()
@@ -256,7 +260,7 @@ class Encaixe:
         for it in sorted(self.itens, key=lambda x: x.ini):
             fila = self.filas[it.maq]
             fila.append(it)
-            it.fixa = len(fila) <= ORDENS_FIXAS
+            it.fixa = len(fila) <= self.ordens_fixas
 
     def _calcular_taxas(self):
         """kg/h de cada máquina por micra: mediana das OFs do relatório com pelo menos MIN_HORAS_TAXA."""
@@ -267,7 +271,7 @@ class Encaixe:
                     micra = parse_dimensoes(it.produto)["micra"]
                     if pd.notna(micra):
                         grupos.setdefault(float(micra), []).append(it.kgh)
-            self.taxas[m] = {k: median(v) for k, v in grupos.items()}
+            self.taxas[m] = {k: median(v) * self.fator_kgh for k, v in grupos.items()}
 
     def _carregar_pedidos(self, reserva: pd.DataFrame) -> list[Pedido]:
         pedidos = []

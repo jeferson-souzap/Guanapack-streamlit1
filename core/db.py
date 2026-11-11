@@ -122,6 +122,17 @@ CREATE TABLE IF NOT EXISTS anotacoes (
     criado_em TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_anotacoes_pedido ON anotacoes (num_pedido, prog);
+CREATE TABLE IF NOT EXISTS cenarios_simulacao (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nome TEXT NOT NULL,
+    criado_em TEXT NOT NULL,
+    usuario TEXT, pc TEXT,
+    regras TEXT,
+    indicadores TEXT,
+    dados TEXT NOT NULL,
+    escolhido INTEGER NOT NULL DEFAULT 0,
+    observacao TEXT
+);
 CREATE TABLE IF NOT EXISTS auditoria (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     data_hora TEXT NOT NULL,

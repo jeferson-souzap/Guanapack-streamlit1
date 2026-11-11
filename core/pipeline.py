@@ -116,6 +116,19 @@ def etapa_encaixe(chave_reserva: tuple, chave_atraso: tuple, sig_plan, maquinas:
                          rank=rank, opcao=opcao)
 
 
+def entradas_encaixe(chave_reserva: tuple, chave_atraso: tuple, sig_plan, maquinas: tuple, prioritarios: tuple,
+                     params: tuple) -> dict:
+    """O que entra no encaixe (para a simulação da programação montar os cenários)."""
+    _aplicar_parametros(dict(params))
+    reserva = etapa_reserva(*chave_reserva)
+    ctlr = etapa_atraso(*chave_atraso) if chave_atraso else None
+    return {"plan": etapa_planejamento(sig_plan)[1], "reserva": reserva,
+            "regras": montar_regras([dict(m) for m in maquinas]),
+            "prioritarios": ListaPrioritarios([dict(l) for l in prioritarios]),
+            "mapa": mapa_data_otd(ctlr[['num_ped', 'num_prog', 'data_otd']]) if ctlr is not None else {},
+            "rank": dict(chave_reserva[3])}
+
+
 @st.cache_resource(show_spinner="Calculando tubetes e pallets…", max_entries=4)
 def etapa_insumos(chave_encaixe: tuple | None, sig_plan, sig_carteira):
     stretch = etapa_planejamento(sig_plan)[1]
@@ -218,6 +231,12 @@ class Contexto:
                           else "nenhuma formulação cadastrada (Cadastros > Formulações)")
             raise FaltaRelatorio(motivo)
         return etapa_encaixe(*self.chave_encaixe)
+
+    def entradas_encaixe(self) -> dict:
+        """Planejamento, reserva, máquinas, prioritários, data OTD e rank (simulação da programação)."""
+        if self.chave_encaixe is None:
+            self.encaixe()                 # levanta FaltaRelatorio com o motivo, como no encaixe
+        return entradas_encaixe(*self.chave_encaixe)
 
     def insumos(self):
         """(tubetes, pallets, detalhe, resumo)."""

@@ -32,6 +32,8 @@ MODULOS = [
            "Sugestão de reserva de estoque para a carteira"),
     Modulo("encaixe", "Encaixe em máquinas", None, "modulos/encaixe.py", "Planejamento",
            "Onde encaixar os pedidos sem estoque"),
+    Modulo("simulacao", "Simulação da programação", None, "modulos/simulacao.py", "Planejamento",
+           "Cenários de fila das máquinas: escolher as regras, mexer na fila à mão e comparar"),
     Modulo("maquinas", "Planejamento das máquinas", None, "modulos/maquinas.py", "Planejamento",
            "Fila de cada máquina com a reserva de cada OF"),
     Modulo("insumos", "Tubetes e pallets", None, "modulos/insumos.py", "Planejamento",
