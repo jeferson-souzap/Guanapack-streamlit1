@@ -34,6 +34,8 @@ with st.form("sim_regras"):
     setup = f.number_input("Setup por troca de grupo (min)", 0, 600, 0, step=15)
     fator = g.number_input("kg/h dos pedidos novos (% da mediana)", 50, 150, 100, step=5)
     prior = h.toggle("Clientes prioritários primeiro", value=True)
+    manter = h.toggle("Manter as OFs travadas", value=True,
+                      help="As OFs travadas (🔒) do cenário atual ficam na mesma máquina e posição na sugestão nova")
     gerar = st.form_submit_button("Gerar sugestão", type="primary")
 
 regras = S.RegrasCenario(sequencia=seq, prioridade=pri, ordens_fixas=int(fixas), prioritarios=prior,
@@ -42,10 +44,17 @@ regras = S.RegrasCenario(sequencia=seq, prioridade=pri, ordens_fixas=int(fixas),
 
 
 def _novo_cenario():
+    travadas, avisos = None, []
+    anterior = st.session_state.get("sim_cen")
+    if manter and anterior is not None and "travada" in anterior.itens:
+        it = anterior.itens
+        travadas = it.loc[it["travada"].fillna(False).astype(bool), ["chave", "maquina", "ordem"]]
     cen = S.gerar_cenario(ent["plan"], ent["reserva"], ent["regras"], ent["prioritarios"], ent["mapa"], ent["rank"],
-                          regras)
-    st.session_state.update(sim_cen=cen, sim_hist=[], sim_avisos=[], sim_versao=st.session_state.get("sim_versao", 0) + 1,
-                            sim_nome=None)
+                          regras, travadas=travadas, avisos=avisos)
+    if travadas is not None and not travadas.empty:
+        avisos.insert(0, f"{len(travadas)} OF(s) travada(s) mantida(s) no lugar.")
+    st.session_state.update(sim_cen=cen, sim_hist=[], sim_avisos=avisos,
+                            sim_versao=st.session_state.get("sim_versao", 0) + 1, sim_nome=None)
 
 
 if gerar or "sim_cen" not in st.session_state:
@@ -95,7 +104,7 @@ with aba_fila:
         st.caption("Para mexer: mude a **ordem** (3 = passa a ser a 3ª da fila) ou a **máquina** da linha e clique em "
                    "Aplicar. Marque **travar** para a OF não sair do lugar quando você mexer nas outras ou agrupar "
                    "(mudar a ordem da própria OF travada leva ela para o lugar novo, ainda travada). "
-                   "Aplicar. 🟧 pedido novo · 🟨 OF que estava em não programadas · 🟥 atrasa por causa da fila · ⬛ já atrasada no planejamento · "
+                   "Gerar sugestão de novo mantém as travadas já aplicadas no mesmo lugar. 🟧 pedido novo · 🟨 OF que estava em não programadas · 🟥 atrasa por causa da fila · ⬛ já atrasada no planejamento · "
                    "🟪 cliente prioritário · 🔀 troca de grupo de formulação (setup) · 🔒 travada.")
         editado = st.data_editor(
             _tabela_tela(fila), key=f"sim_ed_{maq}_{st.session_state.get('sim_versao', 0)}", hide_index=True,

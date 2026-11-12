@@ -98,8 +98,13 @@ def _pedido_do_item(it) -> Pedido:
 
 
 def gerar_cenario(plan, reserva, regras_maq, prioritarios=None, mapa_otd=None, rank=None,
-                  regras: RegrasCenario | None = None, agora=None) -> Cenario:
-    """Roda o encaixe com as regras do cenário e devolve a fila sugerida, pronta para mexer."""
+                  regras: RegrasCenario | None = None, agora=None, travadas: pd.DataFrame | None = None,
+                  avisos: list | None = None) -> Cenario:
+    """Roda o encaixe com as regras do cenário e devolve a fila sugerida, pronta para mexer.
+
+    travadas (chave, maquina, ordem): OFs travadas no cenário anterior. Elas voltam para a mesma
+    máquina e posição e continuam travadas; as outras se arrumam em volta (antes de agrupar por
+    formulação, que também respeita a trava). Os avisos vão para a lista avisos."""
     regras = regras or RegrasCenario()
     rank = dict(rank or {})
     if regras.maquinas:
@@ -137,10 +142,37 @@ def gerar_cenario(plan, reserva, regras_maq, prioritarios=None, mapa_otd=None, r
     itens = pd.DataFrame(linhas)
     taxas = {apelidos[m]: dict(t) for m, t in enumerate(enc.taxas)}
     cen = Cenario(regras=regras, itens=itens, inicio=inicio, taxas=taxas, rank=rank)
+    avs = manter_travadas(cen, travadas) if travadas is not None and not itens.empty else []
+    if avisos is not None:
+        avisos.extend(avs)
     if regras.prioridade == FORMULACAO and not itens.empty:
         for maq in itens["maquina"].unique():
             agrupar_por_formulacao(cen, maq)
     return recalcular(cen)
+
+
+def manter_travadas(cen: Cenario, travadas: pd.DataFrame) -> list[str]:
+    """Põe as OFs travadas de um cenário anterior na mesma máquina e posição, travadas."""
+    if travadas is None or travadas.empty:
+        return []
+    avisos = []
+    presentes = set(cen.itens["chave"])
+    maquinas = set(cen.itens["maquina"]) | set(cen.inicio)
+    linhas = []
+    for r in travadas.itertuples():
+        if r.chave not in presentes:
+            avisos.append(f"{r.chave} estava travada, mas não entrou nesta sugestão (máquina fora do cenário "
+                          "ou já não está no planejamento).")
+            continue
+        maq = r.maquina
+        if maq not in maquinas:
+            maq = cen.itens.loc[cen.itens["chave"] == r.chave, "maquina"].iloc[0]
+            avisos.append(f"{r.chave} estava travada na {r.maquina}, que não entra neste cenário; ficou travada na {maq}.")
+        linhas.append({"chave": r.chave, "maquina": maq, "ordem": int(r.ordem), "travada": True})
+    if linhas:
+        avisos += [a.replace("era FIXA e foi mexida", "travada saiu do lugar de FIXA da sugestão")
+                   for a in aplicar_mudancas(cen, pd.DataFrame(linhas))]
+    return avisos
 
 
 # ===================================================================== mexer na fila

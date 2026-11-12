@@ -10,9 +10,9 @@ SML = "GNP - Extrusora ST 02 (SML 1)"
 REGRAS2 = REGRAS + [{**REGRAS[0], "maquina": SML, "apelido": "SML 1"}]
 
 
-def cenario(ofs, pedidos, regras=None, maquinas=REGRAS):
+def cenario(ofs, pedidos, regras=None, maquinas=REGRAS, **kw):
     return gerar_cenario(pd.DataFrame(ofs), pd.DataFrame(pedidos), maquinas, None, {}, RANK, regras or RegrasCenario(),
-                         agora=INICIO)
+                         agora=INICIO, **kw)
 
 
 def test_sem_mexer_as_datas_sao_as_do_encaixe():
@@ -112,3 +112,22 @@ def test_agrupar_respeita_a_travada():
     aplicar_mudancas(cen, ed)
     agrupar_por_formulacao(cen, "Power")
     assert list(cen.itens["chave"]) == ["OF 0", "OF 1", "OF 2", "OF 3", "OF 5", "OF 4", "OF 6"]
+
+
+def test_gerar_de_novo_mantem_as_travadas():
+    ofs = [of_form(i, 10 * i, "MN 250%") for i in range(7)]
+    cen = cenario(ofs, [])
+    ed = cen.itens[["chave", "maquina", "ordem", "travada"]].copy()
+    ed.loc[ed.chave == "OF 1", ["ordem", "travada"]] = [6, True]     # trava a 2ª na 6ª posição
+    aplicar_mudancas(cen, ed)
+    travadas = cen.itens.loc[cen.itens["travada"], ["chave", "maquina", "ordem"]]
+    avisos = []
+    novo = cenario(ofs, [], travadas=travadas, avisos=avisos)
+    it = novo.itens.set_index("chave")
+    assert it.loc["OF 1", "ordem"] == 6 and bool(it.loc["OF 1", "travada"])
+    assert int(novo.itens["travada"].sum()) == 1
+    assert any("FIXA" in a for a in avisos)                    # saiu de uma posição fixa da sugestão
+    # travada que não existe mais vira aviso
+    avisos = []
+    cenario(ofs, [], travadas=pd.DataFrame([{"chave": "OF 99", "maquina": "Power", "ordem": 2}]), avisos=avisos)
+    assert any("OF 99" in a for a in avisos)
