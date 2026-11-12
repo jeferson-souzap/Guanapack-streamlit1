@@ -51,12 +51,14 @@ if ind is None:
 
 if ind:
     st.subheader("Resumo")
-    linha1 = st.columns(4)
+    linha1 = st.columns(5)
     linha1[0].metric("Pedidos atrasados (OTD)", ui.num(ind.get("atrasados")))
     linha1[1].metric("Vão atrasar", ui.num(ind.get("vao_atrasar")))
-    linha1[2].metric("Pedidos sem estoque", ui.num(ind.get("sem_estoque")),
+    linha1[2].metric("Lead time estoque", ui.num(ind.get("lead_time_estoque")),
+                     help="em aberto com embarque no dia da emissão ou no seguinte")
+    linha1[3].metric("Pedidos sem estoque", ui.num(ind.get("sem_estoque")),
                      help=f"de {ui.num(ind.get('pedidos_reserva'))} pedidos na carteira")
-    linha1[3].metric("Pedir troca de embarque", ui.num(ind.get("troca_pedir")))
+    linha1[4].metric("Pedir troca de embarque", ui.num(ind.get("troca_pedir")))
     linha2 = st.columns(4)
     linha2[0].metric("Novos encaixes", ui.num(ind.get("encaixe_novos")),
                      help=f"{ui.num(ind.get('encaixe_atendem'))} atendem o embarque")

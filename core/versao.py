@@ -2,9 +2,13 @@
 Versão do app, tirada do git: commit, data e mensagem do último commit, e se há alterações locais
 ainda não enviadas. Lida uma vez quando o app sobe (um deploy novo reinicia o app e lê de novo).
 """
+import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+
+import streamlit as st
 
 import config
 
@@ -54,3 +58,39 @@ def ler() -> Versao:
     except ValueError:
         quando = None
     return Versao(commit, quando, mensagem, alteracoes, agora)
+
+
+# ===================================================================== código desatualizado na memória
+
+def _marca(arquivo: str) -> tuple | None:
+    try:
+        s = os.stat(arquivo)
+    except OSError:
+        return None
+    return (s.st_mtime_ns, s.st_size)
+
+
+@st.cache_resource(show_spinner=False)
+def _marcas_dos_modulos() -> dict:
+    """(nome, id do módulo) -> marca do arquivo quando o módulo foi visto pela primeira vez. Fica no cache do
+    processo: sobrevive às recargas da página e ao recarregamento deste próprio arquivo."""
+    return {}
+
+
+def modulos_desatualizados() -> list[str]:
+    """Módulos do app cujo arquivo mudou no disco depois de carregados (ex.: um deploy que não recarregou o
+    config.py). O módulo recarregado é outro objeto (outro id) e começa com a marca nova, então só sobra
+    aqui o que continua rodando com o código antigo. Rodar a cada recarga da página, logo no início."""
+    marcas = _marcas_dos_modulos()
+    raiz = os.path.normcase(str(config.BASE_DIR)) + os.sep
+    antigos = []
+    for nome, modulo in list(sys.modules.items()):
+        arquivo = getattr(modulo, "__file__", None)
+        caminho = os.path.normcase(os.path.abspath(arquivo)) if arquivo else ""
+        if not caminho.startswith(raiz) or f"{os.sep}.venv{os.sep}" in caminho:
+            continue
+        atual = _marca(arquivo)
+        vista = marcas.setdefault((nome, id(modulo)), atual)
+        if vista != atual:
+            antigos.append(nome)
+    return sorted(antigos)

@@ -20,7 +20,7 @@ def _tentar(func):
 
 def calcular(ctx: Contexto) -> dict:
     """Indicadores disponíveis (os que dependem de relatório faltando ficam None)."""
-    p = dict.fromkeys(["atrasados", "vao_atrasar", "pedidos_reserva", "sem_estoque", "encaixe_pedidos",
+    p = dict.fromkeys(["atrasados", "vao_atrasar", "lead_time_estoque", "pedidos_reserva", "sem_estoque", "encaixe_pedidos",
                        "encaixe_novos", "encaixe_atendem", "ofs_passam_atrasar", "troca_pedir",
                        "tubetes_sem_encaixe", "tubetes_com_encaixe", "pallets_sem_encaixe", "pallets_com_encaixe",
                        "estoque_kg", "slow_move_kg", "em_aberto", "em_aberto_kg"])
@@ -29,6 +29,7 @@ def calcular(ctx: Contexto) -> dict:
     if ctlr is not None:
         p["atrasados"] = int((ctlr["atraso_otd"] == "ATRASADO").sum())
         p["vao_atrasar"] = int((ctlr["atraso_otd"] == "VAI ATRASAR").sum())
+        p["lead_time_estoque"] = int(ctlr["lead_time_estoque"].notna().sum())
         aberto = ctlr["status_pedido"].isin(STATUS_EM_ABERTO)
         p["em_aberto"] = int(aberto.sum())
         p["em_aberto_kg"] = float(pd.to_numeric(ctlr.loc[aberto, "peso"], errors="coerce").sum())
@@ -69,7 +70,7 @@ def calcular(ctx: Contexto) -> dict:
     return p
 
 
-COLUNAS_HISTORICO = ["atrasados", "vao_atrasar", "pedidos_reserva", "sem_estoque", "encaixe_pedidos", "encaixe_novos",
+COLUNAS_HISTORICO = ["atrasados", "vao_atrasar", "lead_time_estoque", "pedidos_reserva", "sem_estoque", "encaixe_pedidos", "encaixe_novos",
                      "encaixe_atendem", "ofs_passam_atrasar", "troca_pedir", "tubetes_sem_encaixe",
                      "tubetes_com_encaixe", "pallets_sem_encaixe", "pallets_com_encaixe", "estoque_kg", "slow_move_kg"]
 

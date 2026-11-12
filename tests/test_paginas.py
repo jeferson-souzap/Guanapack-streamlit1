@@ -83,6 +83,8 @@ def _abrir(pagina: str) -> AppTest:
     assert not at.exception, f"app.py: {at.exception}"
     at.switch_page(pagina)
     at.run()
+    assert not [w for w in at.sidebar.warning if "Reinicie o app" in str(w.value)], \
+        "aviso de código desatualizado sem o código ter mudado"
     return at
 
 

@@ -16,7 +16,8 @@ st.set_page_config(page_title="Guanapack PCP", layout="wide")
 
 
 @st.cache_resource(show_spinner=False)
-def _iniciar_banco():
+def _iniciar_banco(versao_esquema: int):
+    """Roda uma vez por processo e de novo quando o esquema muda (cria as colunas novas sem reiniciar)."""
     db.inicializar()
     try:
         db.backup_diario()
@@ -30,8 +31,9 @@ def _versao():
     return versao.ler()
 
 
-_iniciar_banco()
+_iniciar_banco(db.VERSAO_ESQUEMA)
 st.session_state["_run"] = st.session_state.get("_run", 0) + 1
+desatualizados = versao.modulos_desatualizados()
 
 # ------------------------------------------------------------------ navegação por módulos
 estado = contexto.modulos_estado()
@@ -70,6 +72,11 @@ with st.sidebar:
         st.rerun()
     v = _versao()
     st.divider()
+    if desatualizados:
+        st.warning("**Reinicie o app**: o código mudou no servidor, mas parte dele continua carregada na versão "
+                   "antiga e pode dar erro. No Streamlit Cloud: **Manage app → ⋮ → Reboot app**. Localmente: "
+                   "feche e abra de novo.", icon=":material/restart_alt:")
+        st.caption("Desatualizados: " + ", ".join(f"`{m}`" for m in desatualizados))
     st.caption(f"{v.texto}  \n{v.mensagem}  \napp iniciado em {v.iniciado_em:%d/%m/%Y %H:%M} (Brasília)",
                help="Commit do git em uso. Muda a cada deploy novo; 'alterações locais' = há mudanças "
                     "neste computador ainda não commitadas.")

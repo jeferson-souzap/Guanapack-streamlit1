@@ -15,8 +15,8 @@ with aba1:
         # um ponto por dia: o último retrato do dia
         diario = hist.assign(dia=hist["data_hora"].dt.date).groupby("dia").last()
         g1, g2 = st.columns(2)
-        g1.markdown("**Pedidos atrasados e que vão atrasar**")
-        g1.line_chart(diario[["atrasados", "vao_atrasar"]])
+        g1.markdown("**Pedidos atrasados, que vão atrasar e lead time de estoque**")
+        g1.line_chart(diario[[c for c in ("atrasados", "vao_atrasar", "lead_time_estoque") if c in diario]])
         g2.markdown("**Pedidos sem estoque e novos encaixes**")
         g2.line_chart(diario[["sem_estoque", "encaixe_novos", "encaixe_atendem"]])
         g3, g4 = st.columns(2)

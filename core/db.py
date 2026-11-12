@@ -22,7 +22,7 @@ import pandas as pd
 
 import config
 
-VERSAO_ESQUEMA = 1
+VERSAO_ESQUEMA = 2
 
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS historico_indicadores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     data_hora TEXT NOT NULL,
     usuario TEXT, pc TEXT,
-    atrasados INTEGER, vao_atrasar INTEGER,
+    atrasados INTEGER, vao_atrasar INTEGER, lead_time_estoque INTEGER,
     pedidos_reserva INTEGER, sem_estoque INTEGER,
     encaixe_pedidos INTEGER, encaixe_novos INTEGER, encaixe_atendem INTEGER,
     ofs_passam_atrasar INTEGER,
@@ -189,6 +189,7 @@ def inicializar():
     with conectar() as c:
         c.execute("PRAGMA journal_mode = WAL")
         c.executescript(ESQUEMA)
+        _migrar(c)
         c.execute("INSERT OR REPLACE INTO meta (chave, valor) VALUES ('versao_esquema', ?)", (str(VERSAO_ESQUEMA),))
 
         if _vazia(c, "formulacoes") and config.ARQ_FORMULACOES_RANK.exists():
@@ -219,6 +220,19 @@ def inicializar():
 
         for chave, rel in config.RELATORIOS.items():
             c.execute("INSERT OR IGNORE INTO arquivos_relatorios (chave, arquivo) VALUES (?, ?)", (chave, rel.arquivo))
+
+
+# Colunas criadas depois da primeira versão: (tabela, coluna, tipo). O CREATE TABLE IF NOT EXISTS não
+# mexe em tabela que já existe, então os bancos antigos ganham a coluna aqui.
+COLUNAS_NOVAS = [
+    ("historico_indicadores", "lead_time_estoque", "INTEGER"),      # esquema 2
+]
+
+
+def _migrar(c):
+    for tabela, coluna, tipo in COLUNAS_NOVAS:
+        if coluna not in {l["name"] for l in c.execute(f"PRAGMA table_info({tabela})")}:
+            c.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
 
 
 def _vazia(c, tabela: str) -> bool:
