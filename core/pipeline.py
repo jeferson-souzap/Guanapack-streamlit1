@@ -14,8 +14,10 @@ encaixe, os insumos e a troca de embarque; a limpeza e a reserva continuam do ca
 As regras ficam em core/regras (as mesmas do Guanapack-Flask, conferidas com a planilha Excel).
 Os dataframes devolvidos são compartilhados pelo cache: não altere, faça .copy() antes.
 """
+import hashlib
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -276,6 +278,7 @@ class Contexto:
 
 def montar_contexto() -> Contexto:
     """Lê o estado atual (rápido: só stat dos arquivos e consultas pequenas no banco)."""
+    conferir_versao_cache()
     pasta, origem = contexto.pasta_relatorios()
     params = contexto.parametros()
     situacao = relatorios.conferir_todos(pasta, int(params["dias_tolerancia_relatorio"]))
@@ -288,6 +291,36 @@ def montar_contexto() -> Contexto:
         situacao=situacao, params=params, rank=tuple(sorted(cadastros.carregar_rank().items())),
         prioritarios=_tupla(cadastros.carregar_prioritarios()), maquinas=_tupla(cadastros.carregar_maquinas()),
     )
+
+
+_RAIZ = Path(__file__).resolve().parent.parent
+_ARQUIVOS_CODIGO = ("config.py", "core/*.py", "core/regras/*.py")
+
+
+def assinatura_codigo() -> str:
+    """Hash do código que monta os resultados em cache. O st.cache_resource só se invalida quando muda o
+    corpo da própria função em cache, não as regras que ela chama: depois de um deploy, a página nova
+    receberia um resultado calculado pelo código antigo (ex.: KeyError numa coluna nova)."""
+    h = hashlib.sha1()
+    for padrao in _ARQUIVOS_CODIGO:
+        for arq in sorted(_RAIZ.glob(padrao)):
+            h.update(arq.relative_to(_RAIZ).as_posix().encode())
+            h.update(arq.read_bytes())
+    return h.hexdigest()
+
+
+@st.cache_resource
+def _codigo_em_cache() -> dict:
+    """Assinatura do código com que o cache atual foi calculado (compartilhada por todas as sessões)."""
+    return {"assinatura": None}
+
+
+def conferir_versao_cache():
+    """Apaga o cache das etapas se o código mudou desde o último cálculo."""
+    atual, guardada = assinatura_codigo(), _codigo_em_cache()
+    if guardada["assinatura"] != atual:    # None = primeira vez neste processo: limpa também, por garantia
+        limpar_cache()
+        guardada["assinatura"] = atual
 
 
 def limpar_cache():
