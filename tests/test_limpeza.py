@@ -45,3 +45,18 @@ def test_anulado_e_nf_anulada_e_nao_cancelado():
 def test_familias_fora_do_stretch_sao_descartadas():
     df = limpar(linha_ctlr(), linha_ctlr(familia='PEBDL'), linha_ctlr(familia='FILME STRETCH BLUE'))
     assert df['familia'].tolist() == ['FILME STRETCH', 'FILME STRETCH BLUE']
+
+
+def test_so_programacao_stretch():
+    import pandas as pd
+    from core.regras.LimpezaPlanejamento import so_programacao_stretch
+    df = pd.DataFrame([
+        {'tipo_of': 'EXTRUSÃO', 'maquina': 'GNP - Extrusora ST 01 (Davis)', 'produto': 'FILME STRETCH MANUAL 500 X 25'},
+        {'tipo_of': 'EXTRUSÃO', 'maquina': 'GNP - Extrusora ST 03 (Power)', 'produto': 'FILME STRETCH JUMBO 500 X 20'},
+        {'tipo_of': 'EXTRUSÃO', 'maquina': 'GNP - Extrusora 05 (Fralda)', 'produto': 'FILME FRALDA'},
+        {'tipo_of': 'IMPRESSÃO', 'maquina': 'GNP - Extrusora ST 01 (Davis)', 'produto': 'FILME STRETCH'},
+        {'tipo_of': 'EXTRUSÃO', 'maquina': 'Não-programadas', 'produto': 'FILME STRETCH MANUAL 500 X 23'},
+        {'tipo_of': 'EXTRUSÃO', 'maquina': 'Não-programadas', 'produto': 'FILME RECUPERADO'},
+    ])
+    r = so_programacao_stretch(df)
+    assert list(r.index) == [0, 1, 4]

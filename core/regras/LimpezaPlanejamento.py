@@ -29,6 +29,17 @@ def filtrar_extrusao_stretch(df: pd.DataFrame) -> pd.DataFrame:
     return df[(tipo == 'EXTRUSÃO') & maquina.isin(MAQUINAS_STRETCH)]
 
 
+def so_programacao_stretch(df: pd.DataFrame) -> pd.DataFrame:
+    """O que entra na programação de máquina: OFs de extrusão da Davis, SML 1 e Power e as não
+    programadas de produto stretch (as mesmas que o encaixe olha; fralda, recuperado etc. ficam fora)."""
+    df = filtrar_extrusao_stretch(df)
+    if df is None or df.empty:
+        return df
+    nao_prog = df['maquina'].astype(str).str.strip().str.upper() == MAQUINA_NAO_PROGRAMADA
+    stretch = df['produto'].astype(str).str.upper().str.contains('STRETCH', regex=False)
+    return df[~nao_prog | stretch]
+
+
 def processar_dataframe_planejamento(df: pd.DataFrame) -> pd.DataFrame:
     df_proc = df.copy()
 

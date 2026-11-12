@@ -28,7 +28,8 @@ from core.regras.ConsumoInsumos import calcular_consumo
 from core.regras.EncaixeMaquinas import NAO_QUEBRAR, PODE_QUEBRAR, gerar_encaixe
 from core.regras.LimpezaCtlrPedidos import eh_familia_valida, processar_dataframe_ctlr
 from core.regras.LimpezaDataframe import processar_dataframe_estoque
-from core.regras.LimpezaPlanejamento import filtrar_extrusao_stretch, processar_dataframe_planejamento
+from core.regras.LimpezaPlanejamento import (filtrar_extrusao_stretch, processar_dataframe_planejamento,
+                                             so_programacao_stretch)
 from core.regras.Prioridade import ListaPrioritarios
 from core.regras.Maquinas import montar_regras
 from core.regras.ReservaCarteira import sugerir_reservas
@@ -253,8 +254,9 @@ class Contexto:
                            self.sig["planejamento"] if self.ok("planejamento") else None, self._params, self.hoje)
 
     def maquinas_reserva(self) -> pd.DataFrame:
-        """Cada OF do planejamento com a reserva do mesmo pedido/programação/produto."""
-        plan = self.planejamento()[0]
+        """Cada OF da programação de stretch (Davis, SML 1, Power e não programadas de stretch) com a
+        reserva do mesmo pedido/programação/produto."""
+        plan = so_programacao_stretch(self.planejamento()[0])
         try:
             reserva = self.reserva()
         except FaltaRelatorio:
