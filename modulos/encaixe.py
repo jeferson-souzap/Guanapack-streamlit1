@@ -28,12 +28,16 @@ pedidos, filas, resumo = enc
 st.info(resumo)
 
 novos = pedidos["sugestao"] == "NOVO NA MÁQUINA"
-k = st.columns(4)
+np_ = pedidos["sugestao"] == "NÃO PROGRAMADA NA MÁQUINA"
+k = st.columns(5)
 k[0].metric("Novos na máquina", ui.num(novos.sum()),
             help=f"{ui.num((novos & (pedidos['atende_embarque'] == 'SIM')).sum())} atendem o embarque")
 k[1].metric("Por OF de estoque", ui.num((pedidos["sugestao"] == "OF DE ESTOQUE").sum()))
-k[2].metric("Sem máquina", ui.num((pedidos["sugestao"] == "SEM MÁQUINA").sum()))
-k[3].metric("OFs que passam a atrasar", ui.num((filas["atraso"] == "PASSA A ATRASAR").sum()))
+k[2].metric("Sem máquina", ui.num(((pedidos["sugestao"] == "SEM MÁQUINA") & pedidos["id_of"].isna()).sum()),
+            help="pedidos da carteira (as OFs não programadas sem máquina estão no resumo)")
+k[3].metric("Não programadas na máquina", ui.num(np_.sum()),
+            help="entram antes dos pedidos sem estoque (rev031)")
+k[4].metric("OFs que passam a atrasar", ui.num((filas["atraso"] == "PASSA A ATRASAR").sum()))
 
 aba1, aba2, aba3 = st.tabs(["Pedidos sem estoque", "Fila sugerida por máquina", "Gráfico"])
 with aba1:
@@ -47,6 +51,7 @@ with aba2:
     if maq:
         fila = filas[filas["maquina"] == maq]
         st.caption(f"{len(fila)} OFs · {(fila['situacao'] == 'NOVO').sum()} novas · "
+                   f"{(fila['situacao'] == 'NÃO PROGRAMADA').sum()} não programadas · "
                    f"{(fila['atraso'] == 'PASSA A ATRASAR').sum()} passam a atrasar")
         ui.tabela(fila, f"fila_{maq[:20]}", "enc_fila", busca=False)
     with st.expander("Todas as filas"):

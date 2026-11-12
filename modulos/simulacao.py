@@ -76,7 +76,7 @@ def _tabela_tela(df: pd.DataFrame) -> pd.DataFrame:
     t = df.copy()
     t["travar"] = t["travada"].fillna(False).astype(bool) if "travada" in t else False
     t["marca"] = [("🟥" if r.atraso in (S.PASSA_A_ATRASAR, S.NAO_ATENDE) else "⬛" if r.atraso == S.JA_ATRASADA
-                   else "🟧" if r.situacao == "NOVO" else "") + ("🟪" if r.prioritario else "") + ("🔀" if r.troca_grupo else "") + ("🔒" if r.travada else "")
+                   else "🟧" if r.situacao == "NOVO" else "🟨" if r.situacao == "NÃO PROGRAMADA" else "") + ("🟪" if r.prioritario else "") + ("🔀" if r.troca_grupo else "") + ("🔒" if r.travada else "")
                   for r in t.itertuples()]
     return t[["travar", "ordem", "maquina", "marca", "situacao", "chave", "cliente", "produto", "grupo_formulacao",
               "nivel_formulacao", "qtde_kg", "inicio", "fim", "data_otd", "atraso", "empurrado_h", "alerta", "roda_em"]]
@@ -95,7 +95,7 @@ with aba_fila:
         st.caption("Para mexer: mude a **ordem** (3 = passa a ser a 3ª da fila) ou a **máquina** da linha e clique em "
                    "Aplicar. Marque **travar** para a OF não sair do lugar quando você mexer nas outras ou agrupar "
                    "(mudar a ordem da própria OF travada leva ela para o lugar novo, ainda travada). "
-                   "Aplicar. 🟧 pedido novo · 🟥 atrasa por causa da fila · ⬛ já atrasada no planejamento · "
+                   "Aplicar. 🟧 pedido novo · 🟨 OF que estava em não programadas · 🟥 atrasa por causa da fila · ⬛ já atrasada no planejamento · "
                    "🟪 cliente prioritário · 🔀 troca de grupo de formulação (setup) · 🔒 travada.")
         editado = st.data_editor(
             _tabela_tela(fila), key=f"sim_ed_{maq}_{st.session_state.get('sim_versao', 0)}", hide_index=True,

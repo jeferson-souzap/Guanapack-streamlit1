@@ -35,6 +35,17 @@ Regras (combinadas com o usuário em 09 e 10/11/2026):
    meio de uma sequência, mas só quando isso é preciso para atender o prazo ou para não fazer outra OF
    atrasar; havendo posição igual sem quebrar, fica com ela). gerar_encaixe roda as duas: as filas
    seguem a opção escolhida e a tabela de pedidos traz as colunas comparar_* com a outra.
+8. OFs não programadas (rev031, 12/11/2026, pedido do usuário: "encaixar primeiro as OFs que estão
+   como não programado e depois seguir"): as OFs de stretch (produto com "STRETCH"; fralda, recuperado
+   etc. ficam de fora) da "máquina" Não-programadas do planejamento são
+   encaixadas ANTES dos pedidos sem estoque, com as mesmas regras de um pedido novo (máquinas que
+   rodam, posição, prazo, sequência de formulação). Ordem: prioritárias, data OTD, número da OF.
+   Prazo = data OTD do pedido da OF (mapa_otd ou dt_otd); OF sem pedido usa a dt_otd do
+   planejamento (sem dt_otd = sem prazo). Quantidade = qtde_of - qtde_prod. Formulação = grupo_form
+   (ou formulacao). Na fila ficam como "NÃO PROGRAMADA"; na tabela de pedidos entram primeiro, com
+   sugestao "NÃO PROGRAMADA NA MÁQUINA" (ou SEM MÁQUINA) e a coluna id_of. Uma OF de estoque não
+   programada que foi encaixada pode atender pedidos do mesmo produto (regra 2). Pedido da reserva
+   que já tem OF não programada (mesmo pedido/prog) fica com ela ("OF NÃO PROGRAMADA").
 """
 import re
 from dataclasses import dataclass, field
@@ -53,6 +64,10 @@ DIAS_OTD = 2                 # data OTD = embarque - 2 dias (pedido sem data no 
 NOVO = "NOVO NA MÁQUINA"
 OF_ESTOQUE = "OF DE ESTOQUE"
 SEM_MAQUINA = "SEM MÁQUINA"
+NAO_PROG_NA_MAQUINA = "NÃO PROGRAMADA NA MÁQUINA"   # regra 8: a própria OF não programada
+OF_NAO_PROG = "OF NÃO PROGRAMADA"                    # regra 8: pedido da reserva que já tem OF não programada
+SITUACAO_NAO_PROG = "NÃO PROGRAMADA"                 # situação na fila da máquina
+MAQUINA_NAO_PROG = "NÃO-PROGRAMADAS"
 
 NAO_QUEBRAR = "NÃO QUEBRAR"      # regra 7: opções da sequência de formulação
 PODE_QUEBRAR = "PODE QUEBRAR"
@@ -90,6 +105,7 @@ class Item:
     fixa: bool = False
     kgh: float = 0.0
     taxa_origem: str = ""
+    nao_prog: bool = False                 # regra 8: OF que estava em Não-programadas (novo = True também)
 
 
 @dataclass
@@ -113,6 +129,12 @@ class Pedido:
     bloqueios: list = field(default_factory=list)
     passam_atrasar: str = ""
     quebra: bool = False
+    # regra 8: OF não programada encaixada como se fosse pedido
+    id_of: str = ""
+    firmado: str = ""
+    nao_prog: bool = False
+    prazo_of: pd.Timestamp | None = None   # 1º instante já atrasado (None = sem prazo)
+    estoque: bool = False                  # OF sem pedido (pode atender pedidos depois)
 
 
 @dataclass
@@ -215,6 +237,7 @@ class Encaixe:
         self.itens: list[Item] = []
         self.filas: list[list[Item]] = [[] for _ in regras]
         self.taxas: list[dict] = [{} for _ in regras]
+        self.nao_programadas: list[Pedido] = []       # regra 8
         self._carregar_planejamento(plan)
         self._calcular_taxas()
         self.pedidos = self._carregar_pedidos(reserva)
@@ -231,6 +254,9 @@ class Encaixe:
         if plan is None or plan.empty:
             return
         for _, r in plan.iterrows():
+            if _texto(r["maquina"]).upper() == MAQUINA_NAO_PROG:
+                self._carregar_nao_programada(r)
+                continue
             m = self._indice_maquina(r["maquina"])
             ini, fim = r["inicio_prev"], r["final_prev"]
             if m is None or pd.isna(ini) or pd.isna(fim):
@@ -261,6 +287,35 @@ class Encaixe:
             fila = self.filas[it.maq]
             fila.append(it)
             it.fixa = len(fila) <= self.ordens_fixas
+        # regra 8: prioritárias, data OTD, número da OF
+        self.nao_programadas.sort(key=lambda p: (not p.prioritario, p.prazo_of is None,
+                                                 p.prazo_of if p.prazo_of is not None else pd.Timestamp.max,
+                                                 _num(p.id_of)))
+
+    def _carregar_nao_programada(self, r):
+        """Regra 8: OF da "máquina" Não-programadas vira um pedido a encaixar (antes da reserva)."""
+        qtde = _num(r["qtde_of"]) - _num(r.get("qtde_prod"))
+        produto = _texto(r["produto"])
+        if qtde <= 0 or "STRETCH" not in produto.upper():   # fralda, recuperado etc. não são destas máquinas
+            return
+        dims = parse_dimensoes(produto)
+        tubete = dims["peso_tubete"]
+        pedido, prog = _texto(r["pedido"]), _texto(r["seq_prog"])
+        formulacao = _texto(r.get("grupo_form")) or _texto(r.get("formulacao"))
+        otd = self.mapa_otd.get(chave_pedido(pedido, prog)) if pedido else None
+        if otd is None or pd.isna(otd):
+            otd = r.get("dt_otd")
+        prazo = None if otd is None or pd.isna(otd) else pd.Timestamp(otd).normalize() + pd.Timedelta(days=1)
+        cliente = _texto(r.get("cliente"))
+        p = Pedido(num_pedido=pedido, prog=prog, cliente=cliente, embarque=pd.NaT, id_pa=_texto(r["id_pa"]),
+                   produto=produto, formulacao=formulacao, qtde=qtde, familia=extrair_familia(produto) or "",
+                   largura=dims["largura"], micra=dims["micra"], peso=dims["peso"],
+                   tubete=0.0 if pd.isna(tubete) else float(tubete),
+                   prioritario=self.prioritarios.pedido_prioritario(
+                       f"{cliente} {_texto(r.get('cliente_razao_social'))}", produto, formulacao),
+                   id_of=_texto(r["id_of"]), firmado=_texto(r.get("firmado")), nao_prog=True,
+                   prazo_of=prazo, estoque=not pedido)
+        self.nao_programadas.append(p)
 
     def _calcular_taxas(self):
         """kg/h de cada máquina por micra: mediana das OFs do relatório com pelo menos MIN_HORAS_TAXA."""
@@ -295,8 +350,11 @@ class Encaixe:
 
     # ----- regras -----
     def prazo_do_pedido(self, p: Pedido) -> pd.Timestamp:
-        """Dia seguinte à data OTD do pedido (1º instante já atrasado)."""
-        otd = self.mapa_otd.get(chave_pedido(p.num_pedido, p.prog))
+        """Dia seguinte à data OTD do pedido (1º instante já atrasado). OF não programada: o prazo
+        dela (None = sem prazo)."""
+        if p.nao_prog:
+            return p.prazo_of
+        otd =self.mapa_otd.get(chave_pedido(p.num_pedido, p.prog))
         if otd is None or pd.isna(otd):
             otd = p.embarque.normalize() - pd.Timedelta(days=DIAS_OTD)
         return pd.Timestamp(otd).normalize() + pd.Timedelta(days=1)
@@ -333,11 +391,20 @@ class Encaixe:
 
     @staticmethod
     def nome(it: Item) -> str:
-        return f"NOVO {it.pedido}/{it.prog}" if it.novo else f"OF {it.id_of}"
+        return f"NOVO {it.pedido}/{it.prog}" if it.novo and not it.nao_prog else f"OF {it.id_of}"
+
+    def atender_por_of_nao_programada(self, p: Pedido) -> bool:
+        """Regra 8: o pedido já tem OF não programada (mesmo pedido/prog) -> fica com ela."""
+        chave = chave_pedido(p.num_pedido, p.prog)
+        for q in self.nao_programadas:
+            if q.num_pedido and chave_pedido(q.num_pedido, q.prog) == chave:
+                p.tipo, p.item = OF_NAO_PROG, q.item
+                return True
+        return False
 
     def atender_por_of_de_estoque(self, p: Pedido) -> bool:
         limite = self.prazo_do_pedido(p)
-        candidatos = [it for it in self.itens if not it.novo and not it.pedido and it.id_pa == p.id_pa
+        candidatos = [it for it in self.itens if (not it.novo or it.nao_prog) and not it.pedido and it.id_pa == p.id_pa
                       and it.cap_livre >= p.qtde - 0.001 and it.fim < limite]
         if not candidatos:
             return False
@@ -363,7 +430,7 @@ class Encaixe:
         atrasados = [it for it in fila[pos - 1:]
                      if it.prazo is not None and it.fim < it.prazo and it.fim + dur >= it.prazo]
         junto = (pos > 1 and fila[pos - 2].id_pa == p.id_pa) or (pos <= n and fila[pos - 1].id_pa == p.id_pa)
-        return Opcao(maq=m, pos=pos, ini=ini, fim=fim, atende=fim < limite, n_atrasos=len(atrasados),
+        return Opcao(maq=m, pos=pos, ini=ini, fim=fim, atende=limite is None or fim < limite, n_atrasos=len(atrasados),
                      n_atrasos_prior=sum(1 for it in atrasados if it.prioritario),
                      atrasos=", ".join(self.nome(it) for it in atrasados), junto=junto,
                      empurra=n - pos + 1, prioritario=p.prioritario)
@@ -482,35 +549,46 @@ class Encaixe:
                     quebra=melhor.quebra, qtde=p.qtde,
                     ini=melhor.ini, fim=melhor.fim, prazo=limite, kgh=melhor.kgh,
                     taxa_origem=melhor.taxa_origem, prioritario=p.prioritario)
+        if p.nao_prog:                                     # regra 8: continua sendo a OF do planejamento
+            novo.nao_prog, novo.id_of, novo.firmado = True, p.id_of, p.firmado
+            novo.cap_livre = p.qtde if p.estoque else 0.0
         self.itens.append(novo)
         fila.insert(melhor.pos - 1, novo)
-        p.tipo, p.item, p.passam_atrasar, p.quebra = NOVO, novo, melhor.atrasos, melhor.quebra
+        p.tipo = NAO_PROG_NA_MAQUINA if p.nao_prog else NOVO
+        p.item, p.passam_atrasar, p.quebra = novo, melhor.atrasos, melhor.quebra
 
     def executar(self):
+        for p in self.nao_programadas:                     # regra 8: primeiro as não programadas
+            self.encaixar_pedido(p)
         for p in self.pedidos:
-            if not self.atender_por_of_de_estoque(p):
+            if not self.atender_por_of_nao_programada(p) and not self.atender_por_of_de_estoque(p):
                 self.encaixar_pedido(p)
         return self
 
     # ----- saída -----
     def tabela_pedidos(self) -> pd.DataFrame:
         linhas = []
-        for p in self.pedidos:
+        for p in self.nao_programadas + self.pedidos:      # regra 8: as não programadas primeiro
             limite = self.prazo_do_pedido(p)
-            linha = {"num_pedido": p.num_pedido, "prog": p.prog, "cliente": p.cliente, "dt_embarque": p.embarque,
-                     "data_otd": limite - pd.Timedelta(days=1), "id_pa": p.id_pa, "produto": p.produto,
+            linha = {"num_pedido": p.num_pedido or None, "prog": p.prog or None, "cliente": p.cliente,
+                     "dt_embarque": p.embarque,
+                     "data_otd": None if limite is None else limite - pd.Timedelta(days=1),
+                     "id_pa": p.id_pa, "produto": p.produto,
                      "formulacao": p.formulacao, "qtde_kg": p.qtde, "sugestao": p.tipo, "maquina": None,
                      "depois_de": None, "inicio_previsto": None, "fim_previsto": None, "atende_embarque": None,
                      "kg_h": None, "kg_h_origem": None, "ofs_que_passam_a_atrasar": p.passam_atrasar or None,
                      "maquinas_que_nao_rodam": " | ".join(p.bloqueios) or None,
                      "cliente_prioritario": "SIM" if p.prioritario else None,
-                     "quebra_sequencia": "SIM" if p.tipo == NOVO and p.quebra else None}
+                     "quebra_sequencia": "SIM" if p.tipo in (NOVO, NAO_PROG_NA_MAQUINA) and p.quebra else None,
+                     "id_of": p.id_of or None}
             it = p.item
             if it is not None:
                 linha.update(maquina=self.regras[it.maq]["apelido"], inicio_previsto=it.ini, fim_previsto=it.fim,
-                             atende_embarque="SIM" if it.fim < limite else "NÃO")
+                             atende_embarque=None if limite is None else ("SIM" if it.fim < limite else "NÃO"))
                 if p.tipo == OF_ESTOQUE:
-                    linha["depois_de"] = f"OF {it.id_of} (estoque)"
+                    linha["depois_de"] = f"OF {it.id_of} (estoque" + (", não programada)" if it.nao_prog else ")")
+                elif p.tipo == OF_NAO_PROG:
+                    linha["depois_de"] = f"OF {it.id_of} (não programada)"
                 else:
                     fila = self.filas[it.maq]
                     j = next(i for i, x in enumerate(fila) if x is it)
@@ -535,13 +613,14 @@ class Encaixe:
                 if it.atende_pedidos:
                     observacao = "atende os pedidos sem estoque " + ", ".join(it.atende_pedidos)
                 if it.novo:
-                    observacao = f"kg/h {round(it.kgh)} ({it.taxa_origem})"
+                    texto = f"kg/h {round(it.kgh)} ({it.taxa_origem})"
                     if it.quebra:
-                        observacao += " | QUEBRA a sequência de formulação"
+                        texto += " | QUEBRA a sequência de formulação"
+                    observacao = texto if observacao is None else f"{texto} | {observacao}"
                 linhas.append({
                     "maquina": self.regras[m]["apelido"], "seq": j,
-                    "situacao": "NOVO" if it.novo else ("FIXA" if it.fixa else None),
-                    "id_of": None if it.novo else it.id_of, "firmado": it.firmado or None,
+                    "situacao": SITUACAO_NAO_PROG if it.nao_prog else "NOVO" if it.novo else ("FIXA" if it.fixa else None),
+                    "id_of": None if it.novo and not it.nao_prog else it.id_of, "firmado": it.firmado or None,
                     "pedido": it.pedido or None, "prog": it.prog or None, "cliente": it.cliente or None,
                     "id_pa": it.id_pa, "produto": it.produto, "formulacao": it.formulacao,
                     "grupo_formulacao": (it.grupo_form or it.formulacao) or None,
@@ -555,25 +634,41 @@ class Encaixe:
                 })
         return pd.DataFrame(linhas)
 
+    def _resumo_nao_prog(self) -> str:
+        """Regra 8: quantas OFs não programadas entraram e quantas ficaram sem máquina."""
+        if not self.nao_programadas:
+            return ""
+        entram = [p for p in self.nao_programadas if p.tipo == NAO_PROG_NA_MAQUINA]
+        prazo = sum(1 for p in entram if p.prazo_of is None or p.item.fim < p.prazo_of)
+        return (f"não programadas: {len(self.nao_programadas)} ({len(entram)} na máquina, {prazo} no prazo, "
+                f"{len(self.nao_programadas) - len(entram)} sem máquina) | ")
+
     def resumo_novos(self) -> str:
         novos = [p for p in self.pedidos if p.tipo == NOVO]
         atendem = sum(1 for p in novos if p.item.fim < self.prazo_do_pedido(p))
         quebram = sum(1 for p in novos if p.quebra)
         sem = sum(1 for p in self.pedidos if p.tipo == SEM_MAQUINA)
         extra = f", {quebram} {'quebra' if quebram == 1 else 'quebram'} a sequência" if quebram else ""
-        return f"novos na máquina: {len(novos)} ({atendem} atendem o embarque{extra}) | sem máquina: {sem}"
+        return f"{self._resumo_nao_prog()}novos na máquina: {len(novos)} ({atendem} atendem o embarque{extra}) | sem máquina: {sem}"
 
     def resumo(self) -> str:
         novos = [p for p in self.pedidos if p.tipo == NOVO]
         atendem = sum(1 for p in novos if p.item.fim < self.prazo_do_pedido(p))
         quebram = sum(1 for p in novos if p.quebra)
         estoque = sum(1 for p in self.pedidos if p.tipo == OF_ESTOQUE)
+        ligados = sum(1 for p in self.pedidos if p.tipo == OF_NAO_PROG)
         sem = sum(1 for p in self.pedidos if p.tipo == SEM_MAQUINA)
         opcao = PODE_QUEBRAR if self.pode_quebrar else NAO_QUEBRAR
         extra = f", {quebram} {'quebra' if quebram == 1 else 'quebram'} a sequência" if quebram else ""
-        return (f"{len(self.pedidos)} pedidos sem estoque | {opcao} a sequência de formulação | "
+        extra2 = f" | já com OF não programada: {ligados}" if ligados else ""
+        return (f"{self._resumo_nao_prog()}{len(self.pedidos)} pedidos sem estoque | {opcao} a sequência de formulação | "
                 f"novos na máquina: {len(novos)} ({atendem} atendem o embarque{extra})"
-                f" | por OF de estoque: {estoque} | sem máquina: {sem}")
+                f" | por OF de estoque: {estoque}{extra2} | sem máquina: {sem}")
+
+
+def _chave_linha(r) -> str:
+    """Linha da tabela de pedidos: a OF não programada pela OF; o pedido por pedido/prog."""
+    return f"OF {_texto(r.id_of)}" if _texto(r.id_of) else chave_pedido(r.num_pedido, r.prog)
 
 
 def _comparar(pedidos: pd.DataFrame, outra: "Encaixe", opcao_outra: str) -> tuple[pd.DataFrame, int]:
@@ -581,12 +676,12 @@ def _comparar(pedidos: pd.DataFrame, outra: "Encaixe", opcao_outra: str) -> tupl
     tab = outra.tabela_pedidos()
     if pedidos.empty:
         return pedidos, 0
-    ref = {chave_pedido(r.num_pedido, r.prog): r for r in tab.itertuples()}
+    ref = {_chave_linha(r): r for r in tab.itertuples()}
     cols = {"comparar_opcao": [], "comparar_sugestao": [], "comparar_maquina": [],
             "comparar_fim_previsto": [], "comparar_atende_embarque": []}
     difere = 0
     for r in pedidos.itertuples():
-        o = ref.get(chave_pedido(r.num_pedido, r.prog))
+        o = ref.get(_chave_linha(r))
         cols["comparar_opcao"].append(opcao_outra)
         if o is None:
             for c in list(cols)[1:]:
@@ -596,7 +691,7 @@ def _comparar(pedidos: pd.DataFrame, outra: "Encaixe", opcao_outra: str) -> tupl
         cols["comparar_maquina"].append(o.maquina)
         cols["comparar_fim_previsto"].append(o.fim_previsto)
         cols["comparar_atende_embarque"].append(o.atende_embarque)
-        if (r.atende_embarque or "") != (o.atende_embarque or "") or (r.maquina or "") != (o.maquina or ""):
+        if _texto(r.atende_embarque) != _texto(o.atende_embarque) or _texto(r.maquina) != _texto(o.maquina):   # vazio pode vir NaN
             difere += 1
     return pedidos.assign(**cols), difere
 

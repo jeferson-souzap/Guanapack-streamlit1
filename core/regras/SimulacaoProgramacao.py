@@ -26,10 +26,12 @@ from dataclasses import asdict, dataclass, field
 
 import pandas as pd
 
-from core.regras.EncaixeMaquinas import (NAO_QUEBRAR, PODE_QUEBRAR, Encaixe, Pedido,
+from core.regras.EncaixeMaquinas import (NAO_QUEBRAR, PODE_QUEBRAR, SITUACAO_NAO_PROG, Encaixe, Pedido,
                                          nivel_formulacao)
 from core.regras.LimpezaDataframe import extrair_familia, parse_dimensoes
 from core.regras.Prioridade import ListaPrioritarios
+
+ENTRAM = ("NOVO", SITUACAO_NAO_PROG)       # entram na fila pelo encaixe (pedido novo ou OF não programada)
 
 IGNORAR = "IGNORAR"
 SEQUENCIAS = (NAO_QUEBRAR, PODE_QUEBRAR, IGNORAR)
@@ -123,8 +125,8 @@ def gerar_cenario(plan, reserva, regras_maq, prioritarios=None, mapa_otd=None, r
             dur = (it.fim - it.ini) if it.novo else (it.fim0 - it.ini0)
             linhas.append({
                 "chave": Encaixe.nome(it), "maquina": maq, "ordem": j, "travada": False,
-                "situacao": "NOVO" if it.novo else ("FIXA" if it.fixa else ""),
-                "id_of": None if it.novo else it.id_of, "pedido": it.pedido or None, "prog": it.prog or None,
+                "situacao": SITUACAO_NAO_PROG if it.nao_prog else "NOVO" if it.novo else ("FIXA" if it.fixa else ""),
+                "id_of": None if it.novo and not it.nao_prog else it.id_of, "pedido": it.pedido or None, "prog": it.prog or None,
                 "cliente": it.cliente or None, "id_pa": it.id_pa, "produto": it.produto, "formulacao": it.formulacao,
                 "grupo_formulacao": (it.grupo_form or it.formulacao) or None, "qtde_kg": it.qtde,
                 "dur_h": dur.total_seconds() / 3600, "intervalo_h": 0.0 if it.novo else it._intervalo,
@@ -275,7 +277,7 @@ def recalcular(cen: Cenario) -> Cenario:
             trocas.append(bool(troca))
             antes = niveis[j - 1] if j > 0 else None
             depois = niveis[j + 1] if j + 1 < len(niveis) else None
-            quebras.append(r.situacao == "NOVO" and None not in (antes, depois, niveis[j])
+            quebras.append(r.situacao in ENTRAM and None not in (antes, depois, niveis[j])
                            and not (min(antes, depois) <= niveis[j] <= max(antes, depois)))
     it["inicio"], it["fim"], it["troca_grupo"], it["quebra_sequencia"] = inicios, fins, trocas, quebras
     it["empurrado_h"] = [None if pd.isna(a) else round((i - a).total_seconds() / 3600, 1)
@@ -312,7 +314,7 @@ def _atraso(r) -> str | None:
         return None
     if r.fim < r.prazo:
         return OK
-    if r.situacao == "NOVO":
+    if r.situacao in ENTRAM:
         return NAO_ATENDE
     return JA_ATRASADA if pd.notna(r.fim_atual) and r.fim_atual >= r.prazo else PASSA_A_ATRASAR
 
@@ -334,7 +336,7 @@ def indicadores(cen: Cenario) -> dict:
     it = cen.itens
     if it.empty:
         return {}
-    novos = it[it["situacao"] == "NOVO"]
+    novos = it[it["situacao"].isin(ENTRAM)]
     fim = it.groupby("maquina")["fim"].max()
     return {
         "novos": len(novos),
