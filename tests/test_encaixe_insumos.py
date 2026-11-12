@@ -195,3 +195,16 @@ def test_nao_quebrar_e_o_padrao_e_compara_com_a_outra():
     assert p.depois_de == "OF 6" and p.comparar_opcao == "PODE QUEBRAR"
     assert p.comparar_atende_embarque == "SIM" and "quebra a sequência" in p.comparar_sugestao
     assert resumo.startswith("1 pedidos sem estoque | NÃO QUEBRAR")
+
+
+def test_sem_pedido_sem_estoque_as_tabelas_saem_com_as_colunas():
+    # Todo pedido tem estoque: nada para encaixar, mas a tela e os indicadores leem as colunas
+    com_estoque = {**ped(1, "2026-11-20"), "tem_estoque": "SIM"}
+    pedidos, filas, _ = encaixar([of(1, 0)], [com_estoque])
+    assert pedidos.empty
+    for col in ("sugestao", "id_of", "atende_embarque", "maquina", "comparar_sugestao"):
+        assert col in pedidos
+    _, filas_vazias, _ = gerar_encaixe(pd.DataFrame([of(1, 0)]).iloc[0:0], pd.DataFrame([com_estoque]), REGRAS,
+                                       None, {}, agora=INICIO)
+    for col in ("maquina", "situacao", "atraso", "inicio_sugerido", "fim_sugerido"):
+        assert col in filas_vazias

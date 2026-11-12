@@ -566,6 +566,16 @@ class Encaixe:
         return self
 
     # ----- saída -----
+    # As colunas são fixas para a tabela sair com elas mesmo vazia (sem pedido sem estoque, por exemplo).
+    COLUNAS_PEDIDOS = ["num_pedido", "prog", "cliente", "dt_embarque", "data_otd", "id_pa", "produto", "formulacao",
+                       "qtde_kg", "sugestao", "maquina", "depois_de", "inicio_previsto", "fim_previsto",
+                       "atende_embarque", "kg_h", "kg_h_origem", "ofs_que_passam_a_atrasar", "maquinas_que_nao_rodam",
+                       "cliente_prioritario", "quebra_sequencia", "id_of"]
+    COLUNAS_FILAS = ["maquina", "seq", "situacao", "id_of", "firmado", "pedido", "prog", "cliente", "id_pa", "produto",
+                     "formulacao", "grupo_formulacao", "nivel_formulacao", "qtde_kg", "inicio_atual", "fim_atual",
+                     "inicio_sugerido", "fim_sugerido", "empurrado_h", "data_otd", "atraso", "observacao",
+                     "cliente_prioritario"]
+
     def tabela_pedidos(self) -> pd.DataFrame:
         linhas = []
         for p in self.nao_programadas + self.pedidos:      # regra 8: as não programadas primeiro
@@ -595,7 +605,7 @@ class Encaixe:
                     linha.update(depois_de="início da fila" if j == 0 else self.nome(fila[j - 1]),
                                  kg_h=round(it.kgh), kg_h_origem=it.taxa_origem)
             linhas.append(linha)
-        return pd.DataFrame(linhas)
+        return pd.DataFrame(linhas, columns=self.COLUNAS_PEDIDOS)
 
     def tabela_filas(self) -> pd.DataFrame:
         linhas = []
@@ -632,7 +642,7 @@ class Encaixe:
                     "atraso": atraso, "observacao": observacao,
                     "cliente_prioritario": "SIM" if it.prioritario else None,
                 })
-        return pd.DataFrame(linhas)
+        return pd.DataFrame(linhas, columns=self.COLUNAS_FILAS)
 
     def _resumo_nao_prog(self) -> str:
         """Regra 8: quantas OFs não programadas entraram e quantas ficaram sem máquina."""
@@ -674,8 +684,6 @@ def _chave_linha(r) -> str:
 def _comparar(pedidos: pd.DataFrame, outra: "Encaixe", opcao_outra: str) -> tuple[pd.DataFrame, int]:
     """Colunas comparar_* (regra 7): o resultado do mesmo pedido na outra opção."""
     tab = outra.tabela_pedidos()
-    if pedidos.empty:
-        return pedidos, 0
     ref = {_chave_linha(r): r for r in tab.itertuples()}
     cols = {"comparar_opcao": [], "comparar_sugestao": [], "comparar_maquina": [],
             "comparar_fim_previsto": [], "comparar_atende_embarque": []}
