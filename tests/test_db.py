@@ -5,17 +5,34 @@ import config
 from core import db
 
 
-def test_banco_antigo_ganha_a_coluna_de_lead_time(tmp_path, monkeypatch):
+def _tabelas() -> set[str]:
+    return {l["name"] for l in db.consultar("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+def test_banco_antigo_perde_as_tabelas_dos_modulos_removidos(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DADOS_DIR", tmp_path)
     monkeypatch.setattr(config, "DATABASE", tmp_path / "antigo.sqlite3")
-    with sqlite3.connect(config.DATABASE) as c:           # histórico como era no esquema 1
-        c.execute("CREATE TABLE historico_indicadores (id INTEGER PRIMARY KEY AUTOINCREMENT, data_hora TEXT NOT NULL, "
-                  "usuario TEXT, pc TEXT, atrasados INTEGER, vao_atrasar INTEGER)")
+    monkeypatch.setattr(config, "BACKUP_DIR", tmp_path / "backup")
+    with sqlite3.connect(config.DATABASE) as c:           # como era até o esquema 2
+        c.execute("CREATE TABLE historico_indicadores (id INTEGER PRIMARY KEY, data_hora TEXT, atrasados INTEGER)")
         c.execute("INSERT INTO historico_indicadores (data_hora, atrasados) VALUES ('2026-11-01 08:00:00', 5)")
+        c.execute("CREATE TABLE anotacoes (id INTEGER PRIMARY KEY, texto TEXT)")
+        c.execute("CREATE TABLE execucoes (id INTEGER PRIMARY KEY, acao TEXT)")
     db.inicializar()
-    colunas = {l["name"] for l in db.consultar("PRAGMA table_info(historico_indicadores)")}
-    assert "lead_time_estoque" in colunas
-    assert db.consultar("SELECT atrasados, lead_time_estoque FROM historico_indicadores") == \
-        [{"atrasados": 5, "lead_time_estoque": None}]       # o retrato antigo fica, sem o número novo
-    db.inicializar()                                        # rodar de novo não dá erro
+    assert not _tabelas() & set(db.TABELAS_REMOVIDAS)
+    assert {"maquinas", "cenarios_simulacao", "auditoria"} <= _tabelas()
+    backups = list(config.BACKUP_DIR.glob("guanapack_*.sqlite3"))
+    assert len(backups) == 1                               # cópia com as tabelas antigas, antes de apagar
+    with sqlite3.connect(backups[0]) as c:
+        assert c.execute("SELECT atrasados FROM historico_indicadores").fetchall() == [(5,)]
+    db.inicializar()                                       # rodar de novo não dá erro nem faz outro backup
+    assert len(list(config.BACKUP_DIR.glob("guanapack_*.sqlite3"))) == 1
 
+
+def test_banco_novo_nao_cria_as_tabelas_removidas(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DADOS_DIR", tmp_path)
+    monkeypatch.setattr(config, "DATABASE", tmp_path / "novo.sqlite3")
+    monkeypatch.setattr(config, "BACKUP_DIR", tmp_path / "backup")
+    db.inicializar()
+    assert not _tabelas() & set(db.TABELAS_REMOVIDAS)
+    assert not config.BACKUP_DIR.exists() or not any(config.BACKUP_DIR.iterdir())

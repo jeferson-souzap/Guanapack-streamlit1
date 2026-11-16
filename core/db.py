@@ -5,8 +5,7 @@ Fica no banco só o que é do usuário e precisa durar entre uma consulta e outr
 - cadastros: rank de formulações, clientes prioritários (especiais) e regras das máquinas;
 - locais da pasta de relatórios por usuário e PC, e o nome do arquivo de cada relatório;
 - parâmetros das regras, módulos ativos e preferências de cada usuário;
-- histórico de indicadores (um retrato do painel a cada "Atualizar tudo"), log de execuções,
-  anotações nos pedidos e auditoria de toda alteração nos cadastros.
+- cenários salvos da simulação da programação e auditoria de toda alteração nos cadastros.
 
 Os relatórios do ERP não são gravados aqui: o app lê os .xls direto da pasta.
 
@@ -22,7 +21,7 @@ import pandas as pd
 
 import config
 
-VERSAO_ESQUEMA = 2
+VERSAO_ESQUEMA = 3
 
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -89,39 +88,6 @@ CREATE TABLE IF NOT EXISTS preferencias (
     valor TEXT,
     PRIMARY KEY (usuario, chave)
 );
-CREATE TABLE IF NOT EXISTS historico_indicadores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    data_hora TEXT NOT NULL,
-    usuario TEXT, pc TEXT,
-    atrasados INTEGER, vao_atrasar INTEGER, lead_time_estoque INTEGER,
-    pedidos_reserva INTEGER, sem_estoque INTEGER,
-    encaixe_pedidos INTEGER, encaixe_novos INTEGER, encaixe_atendem INTEGER,
-    ofs_passam_atrasar INTEGER,
-    troca_pedir INTEGER,
-    tubetes_sem_encaixe REAL, tubetes_com_encaixe REAL,
-    pallets_sem_encaixe REAL, pallets_com_encaixe REAL,
-    estoque_kg REAL, slow_move_kg REAL,
-    duracao_s REAL,
-    resultado TEXT
-);
-CREATE TABLE IF NOT EXISTS execucoes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    data_hora TEXT NOT NULL,
-    usuario TEXT, pc TEXT,
-    acao TEXT NOT NULL,
-    duracao_s REAL,
-    resultado TEXT
-);
-CREATE TABLE IF NOT EXISTS anotacoes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    num_pedido INTEGER NOT NULL,
-    prog INTEGER,
-    texto TEXT NOT NULL,
-    resolvida INTEGER NOT NULL DEFAULT 0,
-    usuario TEXT, pc TEXT,
-    criado_em TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS ix_anotacoes_pedido ON anotacoes (num_pedido, prog);
 CREATE TABLE IF NOT EXISTS cenarios_simulacao (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nome TEXT NOT NULL,
@@ -186,6 +152,8 @@ def executar(sql: str, parametros: tuple = ()) -> int:
 
 def inicializar():
     """Cria as tabelas e faz a carga inicial dos cadastros (só com a tabela vazia)."""
+    if _tem_tabela_removida():
+        fazer_backup()                     # cópia com as tabelas antigas antes de apagá-las
     with conectar() as c:
         c.execute("PRAGMA journal_mode = WAL")
         c.executescript(ESQUEMA)
@@ -222,17 +190,21 @@ def inicializar():
             c.execute("INSERT OR IGNORE INTO arquivos_relatorios (chave, arquivo) VALUES (?, ?)", (chave, rel.arquivo))
 
 
-# Colunas criadas depois da primeira versão: (tabela, coluna, tipo). O CREATE TABLE IF NOT EXISTS não
-# mexe em tabela que já existe, então os bancos antigos ganham a coluna aqui.
-COLUNAS_NOVAS = [
-    ("historico_indicadores", "lead_time_estoque", "INTEGER"),      # esquema 2
-]
+# Tabelas dos módulos que saíram do app (Histórico, Consulta de pedido): apagadas dos bancos antigos.
+TABELAS_REMOVIDAS = ("historico_indicadores", "execucoes", "anotacoes")      # esquema 3
+
+
+def _tem_tabela_removida() -> bool:
+    if not config.DATABASE.exists():
+        return False
+    with conectar() as c:
+        existentes = {l[0] for l in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    return bool(existentes & set(TABELAS_REMOVIDAS))
 
 
 def _migrar(c):
-    for tabela, coluna, tipo in COLUNAS_NOVAS:
-        if coluna not in {l["name"] for l in c.execute(f"PRAGMA table_info({tabela})")}:
-            c.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo}")
+    for tabela in TABELAS_REMOVIDAS:
+        c.execute(f"DROP TABLE IF EXISTS {tabela}")
 
 
 def _vazia(c, tabela: str) -> bool:
@@ -260,11 +232,6 @@ def auditar(c, tabela: str, acao: str, chave, antes: dict | None, depois: dict |
         return None if d is None else json.dumps(d, ensure_ascii=False, default=str)
     c.execute("INSERT INTO auditoria (data_hora, usuario, pc, tabela, acao, chave, antes, depois) "
               "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (agora(), usuario, pc, tabela, acao, str(chave), js(antes), js(depois)))
-
-
-def registrar_execucao(acao: str, usuario: str, pc: str, duracao_s: float | None = None, resultado: str = "ok"):
-    executar("INSERT INTO execucoes (data_hora, usuario, pc, acao, duracao_s, resultado) VALUES (?, ?, ?, ?, ?, ?)",
-             (agora(), usuario, pc, acao, None if duracao_s is None else round(duracao_s, 1), (resultado or "ok")[:500]))
 
 
 # ===================================================================== cópia de segurança

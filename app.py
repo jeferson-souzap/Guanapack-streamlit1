@@ -4,7 +4,7 @@ Guanapack PCP — app Streamlit.
     streamlit run app.py        (ou dê dois cliques em iniciar.bat)
 
 Os relatórios do ERP são lidos direto da pasta; o banco SQLite (dados/) guarda cadastros,
-locais por usuário/PC, parâmetros, histórico, anotações e auditoria.
+locais por usuário/PC, parâmetros, cenários da simulação e auditoria.
 """
 import streamlit as st
 
