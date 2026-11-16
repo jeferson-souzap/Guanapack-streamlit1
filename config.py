@@ -80,14 +80,13 @@ class Parametro:
 # mudar aqui ou na tela muda o resultado da reserva/encaixe/OTD.
 PARAMETROS = {
     p.chave: p for p in [
-        Parametro("dias_otd", 2, "int", "Data OTD = embarque − N dias (OTD, encaixe e troca de embarque)", "Pedidos e OTD"),
+        Parametro("dias_otd", 2, "int", "Data OTD = embarque − N dias (prazo do encaixe e da simulação)", "Pedidos e OTD"),
         Parametro("tolerancia_qtd", 0.05, "float", "Tolerância da reserva sobre o qtde_kg do pedido (0,05 = ±5%)", "Reserva"),
         Parametro("tolerancia_micra", 2.0, "float", "Micra aceita no alternativo (± micra)", "Reserva"),
         Parametro("max_degraus_formulacao", 1, "int", "Degraus que o alternativo pode subir no rank de formulação", "Reserva"),
         Parametro("ordens_fixas", 3, "int", "Primeiras OFs de cada máquina que não mudam de lugar no encaixe", "Encaixe"),
         Parametro("pode_quebrar_sequencia", 0, "int", "Sequência de formulação no encaixe: 0 = NÃO QUEBRAR, 1 = PODE QUEBRAR "
                   "(só quando é preciso para atender o prazo ou não atrasar outra OF)", "Encaixe"),
-        Parametro("dias_slow_move", 90, "int", "Pallet parado há mais de N dias conta como slow move (indicador)", "Estoque"),
         Parametro("dias_tolerancia_relatorio", 0, "int", "Relatório salvo há mais de N dias recebe aviso (0 = só hoje passa)", "Relatórios"),
     ]
 }

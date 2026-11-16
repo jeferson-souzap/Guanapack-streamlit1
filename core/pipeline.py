@@ -1,15 +1,15 @@
 """
 Cadeia de cálculo, em memória, a partir dos relatórios da pasta:
 
-    estoque ─┐                         ┌─> encaixe em máquina ─┬─> tubetes e pallets
-    carteira ┼─> reserva da carteira ──┘                       └─> troca de embarque
-    solicit. ┤                               ▲
-    CTLR ────┴─> limpeza do CTLR ─> atraso OTD (data OTD)
-    planej. ───> limpeza ─> extrusão stretch ┘
+    estoque ─┐
+    carteira ┼─> reserva da carteira ─────────┐
+    solicit. ┤                                ├─> encaixe em máquina / simulação da programação
+    CTLR ────┴─> limpeza do CTLR ─> data OTD ─┤
+    planej. ───> limpeza ─> extrusão stretch ─┘
 
 Cada etapa fica em cache pela assinatura dos arquivos que usa (caminho + data + tamanho), pelos
 cadastros e pelos parâmetros que a afetam. Mudar o cadastro de máquinas, por exemplo, refaz só o
-encaixe, os insumos e a troca de embarque; a limpeza e a reserva continuam do cache.
+encaixe; a limpeza e a reserva continuam do cache.
 
 As regras ficam em core/regras (as mesmas do Guanapack-Flask, conferidas com a planilha Excel).
 Os dataframes devolvidos são compartilhados pelo cache: não altere, faça .copy() antes.
@@ -23,19 +23,16 @@ import pandas as pd
 import streamlit as st
 
 from core import cadastros, contexto, relatorios
-from core.regras import AtrasoOtd, EncaixeMaquinas, ReservaCarteira, TrocaEmbarque
+from core.regras import AtrasoOtd, EncaixeMaquinas, ReservaCarteira
 from core.regras.AtrasoOtd import calcular_atraso_otd, mapa_data_otd
 from core.regras.ConferenciaLimpeza import conferir_limpeza
-from core.regras.ConsumoInsumos import calcular_consumo
 from core.regras.EncaixeMaquinas import NAO_QUEBRAR, PODE_QUEBRAR, gerar_encaixe
 from core.regras.LimpezaCtlrPedidos import eh_familia_valida, processar_dataframe_ctlr
 from core.regras.LimpezaDataframe import processar_dataframe_estoque
-from core.regras.LimpezaPlanejamento import (filtrar_extrusao_stretch, processar_dataframe_planejamento,
-                                             so_programacao_stretch)
+from core.regras.LimpezaPlanejamento import filtrar_extrusao_stretch, processar_dataframe_planejamento
 from core.regras.Prioridade import ListaPrioritarios
 from core.regras.Maquinas import montar_regras
 from core.regras.ReservaCarteira import sugerir_reservas
-from core.regras.TrocaEmbarque import calcular_troca
 
 
 class FaltaRelatorio(Exception):
@@ -46,7 +43,7 @@ class FaltaRelatorio(Exception):
 
 def _aplicar_parametros(p: dict):
     """Os módulos de regra leem estas constantes na hora do cálculo."""
-    AtrasoOtd.DIAS_OTD = EncaixeMaquinas.DIAS_OTD = TrocaEmbarque.DIAS_OTD = int(p["dias_otd"])
+    AtrasoOtd.DIAS_OTD = EncaixeMaquinas.DIAS_OTD = int(p["dias_otd"])
     EncaixeMaquinas.ORDENS_FIXAS = int(p["ordens_fixas"])
     ReservaCarteira.TOLERANCIA_QTD = float(p["tolerancia_qtd"])
     ReservaCarteira.TOLERANCIA_MICRA = float(p["tolerancia_micra"])
@@ -130,25 +127,6 @@ def entradas_encaixe(chave_reserva: tuple, chave_atraso: tuple, sig_plan, maquin
             "prioritarios": ListaPrioritarios([dict(l) for l in prioritarios]),
             "mapa": mapa_data_otd(ctlr[['num_ped', 'num_prog', 'data_otd']]) if ctlr is not None else {},
             "rank": dict(chave_reserva[3])}
-
-
-@st.cache_resource(show_spinner="Calculando tubetes e pallets…", max_entries=4)
-def etapa_insumos(chave_encaixe: tuple | None, sig_plan, sig_carteira):
-    stretch = etapa_planejamento(sig_plan)[1]
-    encaixe = etapa_encaixe(*chave_encaixe)[0] if chave_encaixe else None
-    carteira = _df(sig_carteira, "carteira") if sig_carteira else None
-    return calcular_consumo(stretch, encaixe, carteira)
-
-
-@st.cache_resource(show_spinner="Conferindo as trocas de embarque…", max_entries=4)
-def etapa_troca(chave_atraso: tuple, chave_encaixe: tuple | None, chave_reserva: tuple | None, sig_plan, params: tuple,
-                hoje):
-    _aplicar_parametros(dict(params))
-    ctlr = etapa_atraso(*chave_atraso)
-    stretch = etapa_planejamento(sig_plan)[1] if sig_plan else None
-    encaixe = etapa_encaixe(*chave_encaixe)[0] if chave_encaixe else None
-    reserva = etapa_reserva(*chave_reserva) if chave_reserva else None
-    return calcular_troca(ctlr, stretch, encaixe, reserva, hoje=hoje)
 
 
 # ===================================================================== fachada
@@ -241,40 +219,6 @@ class Contexto:
             self.encaixe()                 # levanta FaltaRelatorio com o motivo, como no encaixe
         return entradas_encaixe(*self.chave_encaixe)
 
-    def insumos(self):
-        """(tubetes, pallets, detalhe, resumo)."""
-        if not self.ok("planejamento"):
-            raise FaltaRelatorio(", ".join(self.faltando("planejamento")))
-        return etapa_insumos(self.chave_encaixe, self.sig["planejamento"],
-                             self.sig["carteira"] if self.ok("carteira") else None)
-
-    def troca(self):
-        """(tabela, resumo)."""
-        if self.chave_atraso is None:
-            raise FaltaRelatorio(", ".join(self.faltando("ctlr", "solicitacoes")))
-        return etapa_troca(self.chave_atraso, self.chave_encaixe, self.chave_reserva,
-                           self.sig["planejamento"] if self.ok("planejamento") else None, self._params, self.hoje)
-
-    def maquinas_reserva(self) -> pd.DataFrame:
-        """Cada OF da programação de stretch (Davis, SML 1, Power e não programadas de stretch) com a
-        reserva do mesmo pedido/programação/produto."""
-        plan = so_programacao_stretch(self.planejamento()[0])
-        try:
-            reserva = self.reserva()
-        except FaltaRelatorio:
-            return plan.assign(tem_estoque=None, atendimento=None, alternativo_usado=None)
-        cols = [c for c in ('tem_estoque', 'atendimento', 'alternativo_usado', 'qtd_pallets_reservados',
-                            'peso_reservado', 'pallets_reservados') if c in reserva]
-        r = reserva[['num_pedido', 'prog', 'id_pa', *cols]].copy()
-        for c in ('num_pedido', 'prog', 'id_pa'):
-            r[c] = pd.to_numeric(r[c], errors='coerce').astype('Int64')
-        r = r.drop_duplicates(['num_pedido', 'prog', 'id_pa'])
-        p = plan.copy()
-        p['_id_pa'] = pd.to_numeric(p['id_pa'], errors='coerce').astype('Int64')
-        saida = p.merge(r, how='left', left_on=['pedido', 'seq_prog', '_id_pa'], right_on=['num_pedido', 'prog', 'id_pa'],
-                        suffixes=('', '_reserva'))
-        return saida.drop(columns=['_id_pa', 'num_pedido', 'prog', 'id_pa_reserva'], errors='ignore')
-
 
 def montar_contexto() -> Contexto:
     """Lê o estado atual (rápido: só stat dos arquivos e consultas pequenas no banco)."""
@@ -325,23 +269,6 @@ def conferir_versao_cache():
 
 def limpar_cache():
     for etapa in (etapa_estoque, etapa_ctlr, etapa_planejamento, etapa_atraso, etapa_reserva, etapa_encaixe,
-                  etapa_insumos, etapa_troca, relatorios.ler):
+                  relatorios.ler):
         etapa.clear()
     st.cache_data.clear()
-
-
-def atualizar_tudo(ctx: Contexto) -> tuple[dict, float]:
-    """Roda todas as etapas (o que não está em cache é calculado). Devolve (erros por etapa, segundos)."""
-    inicio = time.time()
-    erros = {}
-    for nome, func in [("estoque", ctx.estoque), ("pedidos", ctx.ctlr), ("planejamento", ctx.planejamento),
-                       ("reserva", ctx.reserva), ("encaixe", ctx.encaixe), ("insumos", ctx.insumos),
-                       ("troca", ctx.troca)]:
-        try:
-            func()
-        except FaltaRelatorio as e:
-            erros[nome] = f"falta: {e}"
-        except Exception as e:  # mostra na tela em vez de derrubar o app
-            erros[nome] = f"erro: {e}"
-    ctx.erros = erros
-    return erros, time.time() - inicio

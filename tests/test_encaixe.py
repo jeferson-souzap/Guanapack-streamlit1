@@ -2,7 +2,6 @@
 import pandas as pd
 
 from core.regras.Prioridade import ListaPrioritarios
-from core.regras.ConsumoInsumos import calcular_consumo, catalogo_de_tubetes, medida_do_tubete
 from core.regras.EncaixeMaquinas import NOVO, OF_ESTOQUE, SEM_MAQUINA, gerar_encaixe, grupo_formulacao
 
 MAQUINA = "GNP - Extrusora ST 03 (Power)"
@@ -74,28 +73,6 @@ def test_prioritario_e_encaixado_primeiro():
                              [ped(1, "2026-11-12"), ped(2, "2026-11-30", cliente="Braskem - Triunfo")], lista)
     assert list(pedidos.num_pedido) == ["2", "1"]             # o prioritário vem antes, mesmo embarcando depois
     assert pedidos.iloc[0].cliente_prioritario == "SIM"
-
-
-def test_peso_do_tubete_digitado_errado_vem_do_tubete_de_mesma_medida():
-    catalogo = catalogo_de_tubetes(["Tubete - 514 X 78 X 14,5 X 1,5"])
-    assert medida_do_tubete("Tubete - 514 X 78 X 14,5 X 150", None, catalogo)[:2] == (514, 1.5)
-    assert medida_do_tubete("Tubete - 514 X 78 X 14,5 X0.", None, catalogo)[:2] == (514, 1.5)
-    assert medida_do_tubete("Tubete - 514 X 78 X 9x 0,9", None, catalogo) == (514, 0.9, "")
-
-
-def test_consumo_conta_so_o_que_falta_e_soma_o_encaixe():
-    base = {"maquina": MAQUINA, "pedido": None, "seq_prog": None, "qtde_of": 1000, "tubete": "Tubete - 514 X 78 X 9 X 0,9",
-            "peso_tubete": 0.9, "pallet": "Palete PBR 1000 X 1200", "num_pallet": 3}
-    plan = pd.DataFrame([{**base, "id_of": 1, "qtde_prod": 500, "final_real": pd.NaT, "num_tubete": 101},
-                         {**base, "id_of": 2, "qtde_prod": 1000, "final_real": pd.Timestamp("2026-11-09"), "num_tubete": 100}])
-    encaixe = pd.DataFrame([{"num_pedido": 7, "prog": 1, "sugestao": "NOVO NA MÁQUINA", "maquina": "Power"}])
-    carteira = pd.DataFrame([{"num_pedido": 7, "prog": 1, "tubete": "Tubete - 514 X 78 X 9x 0,9", "qtde_tubete": 40,
-                              "pallet": "Palete PBR 1000 X 1200", "qtde_pallet": 2, "produto": PRODUTO}])
-    tubetes, pallets, _, _ = calcular_consumo(plan, encaixe, carteira)
-    t = tubetes.iloc[0]
-    # OF 1 pela metade: 101 tubetes x 50% = 50,5 -> 51; OF 2 terminada não conta; encaixe soma 40
-    assert (t.largura_mm, t.peso_kg, t.programado_maquinas, t.encaixe, t.com_encaixe) == (514, 0.9, 51, 40, 91)
-    assert pallets.iloc[0].com_encaixe == 2 + 2               # 3 x 50% = 1,5 -> 2, mais 2 do encaixe
 
 
 # ----- regra 6: sequência de formulação (11/11/2026) -----

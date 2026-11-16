@@ -3,7 +3,7 @@ import pandas as pd
 
 from core.regras.EncaixeMaquinas import NAO_PROG_NA_MAQUINA, OF_ESTOQUE, OF_NAO_PROG, SITUACAO_NAO_PROG, gerar_encaixe
 from core.regras.SimulacaoProgramacao import RegrasCenario, gerar_cenario, indicadores
-from tests.test_encaixe_insumos import INICIO, REGRAS, of, ped
+from tests.test_encaixe import INICIO, REGRAS, of, ped
 
 
 def nao_prog(id_of, dt_otd, qtde=1000, pedido=None, id_pa=30, produto=None):

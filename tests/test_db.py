@@ -2,7 +2,7 @@
 import sqlite3
 
 import config
-from core import db, indicadores
+from core import db
 
 
 def test_banco_antigo_ganha_a_coluna_de_lead_time(tmp_path, monkeypatch):
@@ -19,10 +19,3 @@ def test_banco_antigo_ganha_a_coluna_de_lead_time(tmp_path, monkeypatch):
         [{"atrasados": 5, "lead_time_estoque": None}]       # o retrato antigo fica, sem o número novo
     db.inicializar()                                        # rodar de novo não dá erro
 
-
-def test_banco_novo_grava_todas_as_colunas_do_historico(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "DADOS_DIR", tmp_path)
-    monkeypatch.setattr(config, "DATABASE", tmp_path / "novo.sqlite3")
-    db.inicializar()
-    indicadores.gravar({"lead_time_estoque": 7}, 1.0, {})
-    assert db.consultar("SELECT lead_time_estoque FROM historico_indicadores") == [{"lead_time_estoque": 7}]

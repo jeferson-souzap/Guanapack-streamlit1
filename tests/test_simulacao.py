@@ -4,7 +4,7 @@ import pandas as pd
 from core.regras.EncaixeMaquinas import gerar_encaixe
 from core.regras.SimulacaoProgramacao import (FORMULACAO, IGNORAR, PASSA_A_ATRASAR, RegrasCenario, aplicar_mudancas,
                                               agrupar_por_formulacao, de_json, gerar_cenario, indicadores, para_json)
-from tests.test_encaixe_insumos import INICIO, MAQUINA, PRODUTO, RANK, REGRAS, of_form, ped
+from tests.test_encaixe import INICIO, MAQUINA, PRODUTO, RANK, REGRAS, of_form, ped
 
 SML = "GNP - Extrusora ST 02 (SML 1)"
 REGRAS2 = REGRAS + [{**REGRAS[0], "maquina": SML, "apelido": "SML 1"}]

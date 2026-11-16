@@ -1,12 +1,12 @@
 # Guanapack PCP (Streamlit)
 
-App do PCP da Guanapack que leva para o navegador tudo o que foi feito na planilha **Analise-pcp-excel**
-(rev025–027) e no **Guanapack-Flask**: atraso OTD, reserva da carteira, encaixe em máquinas, tubetes e
-pallets e troca de embarque. É organizado em **módulos** e tem uma **Início** simples.
+Ferramenta do PCP da Guanapack para **montar a programação das extrusoras**: **simulação da programação**
+(cenários de fila, ajuste à mão, travas e comparação) e **encaixe em máquinas** dos pedidos sem estoque.
+As regras vêm da planilha **Analise-pcp-excel** e do **Guanapack-Flask**.
 
 - Os **relatórios do ERP são lidos direto da pasta** (`.xls`), a cada consulta. Nada é importado.
 - O **banco SQLite** (`dados/guanapack.sqlite3`) guarda só o que é do usuário: cadastros, locais da pasta
-  por usuário e PC, parâmetros, módulos ativos, histórico, anotações e auditoria.
+  por usuário e PC, parâmetros, módulos ativos, cenários salvos e auditoria.
 
 ## Como abrir
 
@@ -30,11 +30,11 @@ Configuração > Arquivos):
 
 | Relatório | Arquivo padrão | Usado em |
 |---|---|---|
-| Estoque de pallets | `ESTOQUE_PALLETS.xls` | Estoque, Reserva |
-| Controle de pedidos (CTLR) | `CTLR_PEDIDOS.xls` | Pedidos e OTD, Troca |
-| Carteira de pedidos (PCP OF) | `PCP_OF_CARTEIRA_PEDIDO.xls` | Reserva, Encaixe, Insumos |
+| Estoque de pallets | `ESTOQUE_PALLETS.xls` | Reserva (quem fica sem estoque) |
+| Controle de pedidos (CTLR) | `CTLR_PEDIDOS.xls` | Data OTD (prazo) |
+| Carteira de pedidos (PCP OF) | `PCP_OF_CARTEIRA_PEDIDO.xls` | Reserva, Encaixe |
 | Solicitações de reserva | `SOLICITACOES_RESERVA.xls` | CTLR, Reserva |
-| Planejamento das máquinas | `PCP_PLANEJAMENTO_GERAL.xls` | OTD (exportação), Encaixe, Máquinas, Insumos |
+| Planejamento das máquinas | `PCP_PLANEJAMENTO_GERAL.xls` | Fila atual das máquinas |
 
 Cada relatório é conferido antes do uso: **OK** · **Aviso** (salvo antes de hoje) · **Erro** (falta, não abre ou não é o
 relatório certo (o app avisa quando o conteúdo parece ser de outro relatório)). A situação aparece na
@@ -44,21 +44,11 @@ Início e na barra lateral.
 
 | Módulo | O que mostra |
 |---|---|
-| **Início** | Situação dos relatórios, botão **Atualizar tudo** e o resumo do dia |
-| **Consulta de pedido** | Tudo sobre um pedido (CTLR, reserva, encaixe, planejamento, troca) e **anotações** |
-| **Pedidos e OTD** | Atrasados e que vão atrasar pela data OTD (embarque − N dias; exportação pela data do planejamento) |
-| **Estoque** | Disponível, dias parado, slow move, por formulação |
-| **Reserva da carteira** | Pallet sugerido para cada pedido (exato ou alternativo) e motivo de quem fica sem estoque |
+| **Início** | Situação dos relatórios e atalhos |
+| **Simulação da programação** | Cenários de fila: regras (sequência de formulação, prazo × formulação, setup, OFs fixas), ajuste à mão, travas, desfazer, Gantt e cenários salvos para comparar |
 | **Encaixe em máquinas** | Onde produzir os pedidos sem estoque, fila sugerida e gráfico de Gantt por máquina |
-| **Planejamento das máquinas** | Cada OF com a reserva do mesmo pedido |
-| **Tubetes e pallets** | Consumo das OFs abertas, sem e com os encaixes novos |
-| **Troca de embarque** | Pedidos emitidos ontem/hoje que precisam de nova data, com texto pronto para o comercial |
-| **Histórico** | Evolução dos indicadores, log de execuções e auditoria dos cadastros |
 | **Cadastros** | Rank de formulações, clientes prioritários e regras das máquinas (edição como planilha) |
 | **Configuração** | Pasta por usuário/PC, nomes dos arquivos, parâmetros das regras, módulos e backup |
-
-Todas as tabelas têm busca e botão **Excel**. Em Configuração > Módulos dá para desligar módulos e
-mudar a ordem do menu (Início, Cadastros e Configuração ficam sempre ligados).
 
 ## O que fica no banco
 
@@ -71,9 +61,7 @@ mudar a ordem do menu (Início, Cadastros e Configuração ficam sempre ligados)
 | `arquivos_relatorios` | Nome do arquivo de cada relatório |
 | `parametros` | Parâmetros das regras alterados (os padrões estão em `config.py`) |
 | `modulos`, `preferencias` | Módulos ativos/ordem e preferências por usuário |
-| `historico_indicadores` | Um retrato dos números a cada **Atualizar tudo** |
-| `execucoes` | Log de quem rodou o quê, quando e quanto demorou |
-| `anotacoes` | Anotações livres nos pedidos (resolver/reabrir) |
+| `cenarios_simulacao` | Cenários salvos da simulação (fila, regras, indicadores, escolhido) |
 | `auditoria` | Toda alteração em cadastros, locais e parâmetros: antes, depois, usuário e PC |
 
 Na primeira execução os cadastros são carregados dos CSV em `cadastros/` (só com a tabela vazia).
@@ -102,22 +90,21 @@ Editáveis em Configuração > Parâmetros (padrões da planilha rev027):
 | Micra aceita no alternativo | ±2 |
 | Degraus que o alternativo pode subir no rank | 1 |
 | Primeiras OFs fixas de cada máquina no encaixe | 3 |
-| Dias para slow move | 90 |
 | Dias de tolerância para relatório antigo | 0 |
 
 ## Como funciona o cálculo
 
 ```
-estoque ─┐                         ┌─> encaixe em máquina ─┬─> tubetes e pallets
-carteira ┼─> reserva da carteira ──┘                       └─> troca de embarque
-solicit. ┤                               ▲
-CTLR ────┴─> limpeza do CTLR ─> atraso OTD (data OTD)
-planej. ───> limpeza ─> extrusão stretch ┘
+estoque ─┐
+carteira ┼─> reserva da carteira ─────────┐
+solicit. ┤                                ├─> encaixe em máquina / simulação da programação
+CTLR ────┴─> limpeza do CTLR ─> data OTD ─┤
+planej. ───> limpeza ─> extrusão stretch ─┘
 ```
 
 Cada etapa fica em cache pela "assinatura" dos arquivos (caminho + data de gravação + tamanho), pelos
 cadastros e pelos parâmetros de que depende. Salvou um relatório novo? A próxima consulta já usa o novo.
-Mudou uma máquina? Só o encaixe, os insumos e a troca são refeitos. O botão **Reler relatórios** da
+Mudou uma máquina? Só o encaixe é refeito. O botão **Reler relatórios** da
 barra lateral apaga o cache.
 
 As regras (`core/regras/`) são as mesmas do Guanapack-Flask, conferidas com a planilha Excel, e têm
@@ -135,8 +122,7 @@ core/
   relatorios.py        leitura e conferência dos .xls (com cache)
   pipeline.py          cadeia de cálculo em memória (com cache por etapa)
   cadastros.py         validação e gravação dos cadastros
-  indicadores.py       números do painel e histórico
-  anotacoes.py         anotações nos pedidos
+  cenarios.py          cenários salvos da simulação
   ui.py                peças de tela (tabela com busca, Excel, avisos)
   regras/              regras de negócio (puras, testadas)
 modulos/               uma página por módulo (registro em modulos/__init__.py)

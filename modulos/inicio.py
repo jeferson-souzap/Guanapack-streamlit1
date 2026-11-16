@@ -1,16 +1,15 @@
-"""Início: situação dos relatórios, botão de atualizar e o resumo do dia."""
+"""Início: situação dos relatórios e atalhos para a simulação da programação e o encaixe."""
 from datetime import datetime
 
 import streamlit as st
 
-from core import contexto, db, indicadores, pipeline, ui
-from modulos import MODULOS
+from core import contexto, ui
 
 c = ui.ctx()
 hora = datetime.now().hour
 saudacao = "Bom dia" if hora < 12 else "Boa tarde" if hora < 18 else "Boa noite"
 st.title(f"{saudacao}, {contexto.usuario().split('.')[0].title()}")
-st.caption(f"Guanapack PCP · {datetime.now():%d/%m/%Y} · relatórios em `{c.pasta}`")
+st.caption(f"Guanapack PCP · programação das máquinas · {datetime.now():%d/%m/%Y} · relatórios em `{c.pasta}`")
 
 # ------------------------------------------------------------------ relatórios
 colunas = st.columns(len(c.situacao))
@@ -21,58 +20,17 @@ for col, s in zip(colunas, c.situacao.values()):
 
 erros_rel = [s for s in c.situacao.values() if s["situacao"] == "ERRO"]
 if erros_rel:
-    st.warning(f"{len(erros_rel)} relatório(s) com problema. Os módulos que dependem deles ficam sem cálculo. "
+    st.warning(f"{len(erros_rel)} relatório(s) com problema. A simulação e o encaixe precisam de todos eles. "
                "Salve os relatórios na pasta ou ajuste o local em **Configuração**.")
 
-esq, dir_ = st.columns([1, 3])
-if esq.button("Atualizar tudo", type="primary", width="stretch",
-              help="Calcula pedidos, reserva, encaixe, insumos e troca (o que não mudou vem do cache) "
-                   "e grava um retrato dos indicadores no histórico"):
-    with st.spinner("Calculando…"):
-        erros, duracao = pipeline.atualizar_tudo(c)
-        ind = indicadores.calcular(c)
-        indicadores.gravar(ind, duracao, erros)
-        db.registrar_execucao("atualizar tudo", contexto.usuario(), contexto.pc(), duracao,
-                              "ok" if not erros else str(erros))
-    st.session_state["_indicadores"] = ind
-    if erros:
-        dir_.warning("Concluído com pendências: " + " · ".join(f"**{k}** {v}" for k, v in erros.items()))
-    else:
-        dir_.success(f"Tudo atualizado em {duracao:.0f} s.")
-
-# ------------------------------------------------------------------ resumo
-ind = st.session_state.get("_indicadores")
-if ind is None:
-    ultimo = db.consultar("SELECT * FROM historico_indicadores ORDER BY id DESC LIMIT 1")
-    if ultimo:
-        ind = ultimo[0]
-        st.caption(f"Resumo da última atualização ({ind['data_hora']}, por {ind['usuario']}). "
-                   "Clique em **Atualizar tudo** para recalcular com os relatórios de agora.")
-
-if ind:
-    st.subheader("Resumo")
-    linha1 = st.columns(5)
-    linha1[0].metric("Pedidos atrasados (OTD)", ui.num(ind.get("atrasados")))
-    linha1[1].metric("Vão atrasar", ui.num(ind.get("vao_atrasar")))
-    linha1[2].metric("Lead time estoque", ui.num(ind.get("lead_time_estoque")),
-                     help="em aberto com embarque no dia da emissão ou no seguinte")
-    linha1[3].metric("Pedidos sem estoque", ui.num(ind.get("sem_estoque")),
-                     help=f"de {ui.num(ind.get('pedidos_reserva'))} pedidos na carteira")
-    linha1[4].metric("Pedir troca de embarque", ui.num(ind.get("troca_pedir")))
-    linha2 = st.columns(4)
-    linha2[0].metric("Novos encaixes", ui.num(ind.get("encaixe_novos")),
-                     help=f"{ui.num(ind.get('encaixe_atendem'))} atendem o embarque")
-    linha2[1].metric("OFs que passam a atrasar", ui.num(ind.get("ofs_passam_atrasar")))
-    linha2[2].metric("Estoque disponível", ui.kg(ind.get("estoque_kg")))
-    linha2[3].metric("Slow move", ui.kg(ind.get("slow_move_kg")))
-else:
-    st.info("Clique em **Atualizar tudo** para ver o resumo do dia.")
-
 # ------------------------------------------------------------------ atalhos
-st.subheader("Módulos")
-estado = contexto.modulos_estado()
-ativos = [m for m in MODULOS if m.id != "inicio" and (m.fixo or estado.get(m.id, {}).get("ativo", 1))]
-grade = st.columns(4)
-for i, m in enumerate(ativos):
-    with grade[i % 4]:
-        st.page_link(m.arquivo, label=m.titulo, icon=m.icone, help=m.descricao)
+st.subheader("Montar a programação")
+a, b = st.columns(2)
+with a.container(border=True):
+    st.page_link("modulos/simulacao.py", label="**Simulação da programação**", icon=":material/tune:")
+    st.caption("Escolha as regras, gere a sugestão de fila, mexa à mão (posição e máquina), trave OFs e "
+               "compare cenários salvos.")
+with b.container(border=True):
+    st.page_link("modulos/encaixe.py", label="**Encaixe em máquinas**", icon=":material/view_timeline:")
+    st.caption("Onde produzir os pedidos sem estoque, a fila sugerida de cada máquina e o gráfico de Gantt.")
+st.caption("Regras das máquinas e rank das formulações em **Cadastros**; pasta e parâmetros em **Configuração**.")

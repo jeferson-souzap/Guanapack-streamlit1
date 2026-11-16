@@ -104,8 +104,8 @@ with aba4:
 
 with aba5:
     st.markdown(f"Banco: `{config.DATABASE}`")
-    tabelas = ["formulacoes", "clientes_prioritarios", "maquinas", "locais_relatorios", "parametros", "anotacoes",
-               "historico_indicadores", "execucoes", "auditoria"]
+    tabelas = ["formulacoes", "clientes_prioritarios", "maquinas", "locais_relatorios", "parametros",
+               "cenarios_simulacao", "auditoria"]
     contagem = {t: db.consultar(f"SELECT COUNT(*) AS n FROM {t}")[0]["n"] for t in tabelas}
     st.dataframe([{"tabela": t, "linhas": n} for t, n in contagem.items()], hide_index=True)
     b1, b2 = st.columns(2)
