@@ -17,10 +17,20 @@ ui.cabecalho("Encaixe em máquinas",
 # Regra 7: a opção fica salva nos parâmetros; o encaixe roda as duas e mostra a outra nas colunas comparar_*
 opcoes = ["NÃO QUEBRAR", "PODE QUEBRAR"]
 atual = 1 if int(c.params.get("pode_quebrar_sequencia", 0)) else 0
-escolha = st.radio("Sequência de formulação", opcoes, index=atual, horizontal=True,
-                   help="As filas das máquinas seguem esta opção; as colunas comparar_* dos pedidos mostram a outra.")
+col_seq, col_micra = st.columns([3, 1])
+escolha = col_seq.radio("Sequência de formulação", opcoes, index=atual, horizontal=True,
+                        help="As filas das máquinas seguem esta opção; as colunas comparar_* dos pedidos mostram a outra.")
 if opcoes.index(escolha) != atual:
     contexto.salvar_parametro("pode_quebrar_sequencia", opcoes.index(escolha))
+    st.rerun()
+# Regra 9: fica salvo nos parâmetros (o mesmo de Configuração > Parâmetros) e vale também na simulação
+salto_atual = float(c.params.get("salto_micra", 5.0))
+salto = col_micra.number_input("Salto de micra acima de (µ)", min_value=0.0, max_value=50.0, value=salto_atual,
+                               step=1.0, help="Duas OFs seguidas com diferença de micra maior que isso são salto: a "
+                                              "fila mostra a OF de estoque de micra intermediária a gerar entre elas. "
+                                              "Fica salvo para todos (também em Configuração > Parâmetros).")
+if salto != salto_atual:
+    contexto.salvar_parametro("salto_micra", salto)
     st.rerun()
 
 enc = ui.calcular(c.encaixe)
