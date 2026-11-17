@@ -46,6 +46,7 @@ Início e na barra lateral.
 |---|---|
 | **Início** | Situação dos relatórios e atalhos |
 | **Simulação da programação** | Cenários de fila: regras (sequência de formulação, subida e descida de micra, prazo × formulação, setup, OFs fixas), ajuste à mão, travas, desfazer, Gantt e cenários salvos para comparar |
+| **Reserva de estoque** | Qual pallet do estoque reservar para cada pedido da carteira (exato ou alternativo) e quem fica sem estoque |
 | **Encaixe em máquinas** | Onde produzir os pedidos sem estoque, fila sugerida (com os saltos de micra e a OF de estoque intermediária a gerar) e gráfico de Gantt por máquina |
 | **Cadastros** | Rank de formulações, clientes prioritários e regras das máquinas (edição como planilha) |
 | **Configuração** | Pasta por usuário/PC, nomes dos arquivos, parâmetros das regras, módulos e backup |

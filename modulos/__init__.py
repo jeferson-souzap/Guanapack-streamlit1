@@ -25,6 +25,8 @@ MODULOS = [
            "Enviar os relatórios do ERP pelo navegador (app na nuvem)", fixo=True),
     Modulo("simulacao", "Simulação da programação", None, "modulos/simulacao.py", "Programação",
            "Cenários de fila das máquinas: escolher as regras, mexer na fila à mão e comparar"),
+    Modulo("reserva", "Reserva de estoque", None, "modulos/reserva.py", "Programação",
+           "Qual pallet do estoque reservar para cada pedido da carteira (exato ou alternativo)"),
     Modulo("encaixe", "Encaixe em máquinas", None, "modulos/encaixe.py", "Programação",
            "Onde encaixar os pedidos sem estoque"),
     Modulo("cadastros", "Cadastros", None, "modulos/cadastros.py", "Ajustes",

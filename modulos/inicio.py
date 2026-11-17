@@ -1,4 +1,4 @@
-"""Início: situação dos relatórios e atalhos para a simulação da programação e o encaixe."""
+"""Início: situação dos relatórios e atalhos para a simulação, a reserva de estoque e o encaixe."""
 from datetime import datetime
 
 import streamlit as st
@@ -25,11 +25,14 @@ if erros_rel:
 
 # ------------------------------------------------------------------ atalhos
 st.subheader("Montar a programação")
-a, b = st.columns(2)
+a, r, b = st.columns(3)
 with a.container(border=True):
     st.page_link("modulos/simulacao.py", label="**Simulação da programação**", icon=":material/tune:")
     st.caption("Escolha as regras, gere a sugestão de fila, mexa à mão (posição e máquina), trave OFs e "
                "compare cenários salvos.")
+with r.container(border=True):
+    st.page_link("modulos/reserva.py", label="**Reserva de estoque**", icon=":material/inventory_2:")
+    st.caption("Qual pallet reservar para cada pedido da carteira; quem fica sem estoque vai para o encaixe.")
 with b.container(border=True):
     st.page_link("modulos/encaixe.py", label="**Encaixe em máquinas**", icon=":material/view_timeline:")
     st.caption("Onde produzir os pedidos sem estoque, a fila sugerida de cada máquina e o gráfico de Gantt.")
