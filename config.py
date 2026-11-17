@@ -87,6 +87,8 @@ PARAMETROS = {
         Parametro("ordens_fixas", 3, "int", "Primeiras OFs de cada máquina que não mudam de lugar no encaixe", "Encaixe"),
         Parametro("pode_quebrar_sequencia", 0, "int", "Sequência de formulação no encaixe: 0 = NÃO QUEBRAR, 1 = PODE QUEBRAR "
                   "(só quando é preciso para atender o prazo ou não atrasar outra OF)", "Encaixe"),
+        Parametro("salto_micra", 5.0, "float", "Maior diferença de micra entre duas OFs seguidas na máquina; acima "
+                  "disso é salto e precisa de OF de estoque de micra intermediária (encaixe e simulação)", "Encaixe"),
         Parametro("dias_tolerancia_relatorio", 0, "int", "Relatório salvo há mais de N dias recebe aviso (0 = só hoje passa)", "Relatórios"),
     ]
 }

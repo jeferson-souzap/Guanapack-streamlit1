@@ -29,10 +29,13 @@ with st.form("sim_regras"):
     seq = a.radio("Sequência de formulação", list(ROTULO_SEQ), format_func=ROTULO_SEQ.get)
     pri = b.radio("O que manda na fila", list(ROTULO_PRI), format_func=ROTULO_PRI.get)
     maqs = d.multiselect("Máquinas", MAQUINAS, default=MAQUINAS)
-    e, f, g, h = st.columns(4)
+    e, f, g, i, h = st.columns(5)
     fixas = e.number_input("OFs fixas no começo de cada máquina", 0, 20, int(c.params.get("ordens_fixas", 3)))
     setup = f.number_input("Setup por troca de grupo (min)", 0, 600, 0, step=15)
     fator = g.number_input("kg/h dos pedidos novos (% da mediana)", 50, 150, 100, step=5)
+    salto = i.number_input("Salto de micra acima de (µ)", 0.0, 50.0, float(c.params.get("salto_micra", 5.0)), step=1.0,
+                           help="Duas OFs seguidas com diferença de micra maior que isso são salto: a linha mostra a "
+                                "micra da OF de estoque a gerar entre elas (vale na fila toda, também entre formulações)")
     prior = h.toggle("Clientes prioritários primeiro", value=True)
     manter = h.toggle("Manter as OFs travadas", value=True,
                       help="As OFs travadas (🔒) do cenário atual ficam na mesma máquina e posição na sugestão nova")
@@ -40,7 +43,7 @@ with st.form("sim_regras"):
 
 regras = S.RegrasCenario(sequencia=seq, prioridade=pri, ordens_fixas=int(fixas), prioritarios=prior,
                          setup_min=float(setup), maquinas=maqs if len(maqs) < len(MAQUINAS) else [],
-                         fator_kgh=fator / 100)
+                         fator_kgh=fator / 100, salto_micra=float(salto))
 
 
 def _novo_cenario():
@@ -68,7 +71,7 @@ st.caption(f"**{titulo}** · {cen.regras.texto()}"
 
 # ------------------------------------------------------------------ indicadores
 ind = S.indicadores(cen)
-k = st.columns(6)
+k = st.columns(7)
 k[0].metric("Novos no prazo", f"{ind.get('novos_no_prazo', 0)} de {ind.get('novos', 0)}")
 k[1].metric("OFs que passam a atrasar", ind.get("passam_a_atrasar", 0))
 k[2].metric("Fora do prazo (total)", ind.get("fora_do_prazo", 0),
@@ -76,6 +79,9 @@ k[2].metric("Fora do prazo (total)", ind.get("fora_do_prazo", 0),
 k[3].metric("Prioritários fora do prazo", ind.get("prioritarios_fora", 0))
 k[4].metric("Trocas de grupo", ind.get("trocas_grupo", 0))
 k[5].metric("Pedidos no meio de sequência", ind.get("quebras", 0))
+k[6].metric("Saltos de micra", ind.get("saltos_micra", 0),
+            help=f"passagens entre OFs seguidas com mais de {cen.regras.salto_micra:g} µ de diferença; "
+                 "cada uma pede OF de estoque de micra intermediária (veja a coluna salto de micra)")
 for aviso in st.session_state.get("sim_avisos", []):
     st.warning(aviso)
 
@@ -84,11 +90,13 @@ for aviso in st.session_state.get("sim_avisos", []):
 def _tabela_tela(df: pd.DataFrame) -> pd.DataFrame:
     t = df.copy()
     t["travar"] = t["travada"].fillna(False).astype(bool) if "travada" in t else False
+    if "salto_micra" not in t:
+        t["salto_micra"] = None
     t["marca"] = [("🟥" if r.atraso in (S.PASSA_A_ATRASAR, S.NAO_ATENDE) else "⬛" if r.atraso == S.JA_ATRASADA
-                   else "🟧" if r.situacao == "NOVO" else "🟨" if r.situacao == "NÃO PROGRAMADA" else "") + ("🟪" if r.prioritario else "") + ("🔀" if r.troca_grupo else "") + ("🔒" if r.travada else "")
+                   else "🟧" if r.situacao == "NOVO" else "🟨" if r.situacao == "NÃO PROGRAMADA" else "") + ("🟪" if r.prioritario else "") + ("🔀" if r.troca_grupo else "") + ("↕️" if isinstance(r.salto_micra, str) else "") + ("🔒" if r.travada else "")
                   for r in t.itertuples()]
     return t[["travar", "ordem", "maquina", "marca", "situacao", "chave", "cliente", "produto", "grupo_formulacao",
-              "nivel_formulacao", "qtde_kg", "inicio", "fim", "data_otd", "atraso", "empurrado_h", "alerta", "roda_em"]]
+              "nivel_formulacao", "micra", "qtde_kg", "inicio", "fim", "data_otd", "atraso", "empurrado_h", "salto_micra", "alerta", "roda_em"]]
 
 
 aba_fila, aba_graf, aba_cen = st.tabs(["Ajustar a fila", "Gráfico", "Cenários salvos"])
@@ -105,7 +113,8 @@ with aba_fila:
                    "Aplicar. Marque **travar** para a OF não sair do lugar quando você mexer nas outras ou agrupar "
                    "(mudar a ordem da própria OF travada leva ela para o lugar novo, ainda travada). "
                    "Gerar sugestão de novo mantém as travadas já aplicadas no mesmo lugar. 🟧 pedido novo · 🟨 OF que estava em não programadas · 🟥 atrasa por causa da fila · ⬛ já atrasada no planejamento · "
-                   "🟪 cliente prioritário · 🔀 troca de grupo de formulação (setup) · 🔒 travada.")
+                   "🟪 cliente prioritário · 🔀 troca de grupo de formulação (setup) · ↕️ salto de micra (gerar OF de estoque "
+                   "intermediária antes) · 🔒 travada.")
         editado = st.data_editor(
             _tabela_tela(fila), key=f"sim_ed_{maq}_{st.session_state.get('sim_versao', 0)}", hide_index=True,
             width="stretch", height=min(38 * (len(fila) + 1), 640),
@@ -121,6 +130,8 @@ with aba_fila:
                 "fim": st.column_config.DatetimeColumn("fim", format="DD/MM HH:mm"),
                 "data_otd": st.column_config.DateColumn("data OTD", format="DD/MM/YYYY"),
                 "nivel_formulacao": st.column_config.NumberColumn("nível", width="small"),
+                "micra": st.column_config.NumberColumn("micra", format="%g", width="small"),
+                "salto_micra": st.column_config.TextColumn("salto de micra"),
                 "empurrado_h": st.column_config.NumberColumn("empurrado (h)", format="%.1f"),
             })
         b1, b2, b3, b4 = st.columns(4)
@@ -131,7 +142,8 @@ with aba_fila:
             st.session_state["sim_versao"] += 1
             st.rerun()
         if b2.button("Agrupar esta máquina por formulação", width="stretch",
-                     help="Sobe a partir do grupo da última OF fixa e depois desce; dentro do grupo fica a ordem atual"):
+                     help="Sobe a partir do grupo da última OF fixa e depois desce; dentro de cada grupo a micra sobe ou "
+                          "desce continuando da micra da OF anterior, para a transição ficar suave"):
             st.session_state["sim_hist"].append(copy.deepcopy(cen))
             S.agrupar_por_formulacao(cen, maq)
             st.session_state.update(sim_avisos=[], sim_versao=st.session_state["sim_versao"] + 1)
@@ -174,7 +186,7 @@ with aba_cen:
     else:
         ROT = {"novos_no_prazo": "novos no prazo", "novos": "novos", "passam_a_atrasar": "passam a atrasar",
                "fora_do_prazo": "fora do prazo", "prioritarios_fora": "prioritários fora", "trocas_grupo": "trocas de grupo",
-               "quebras": "no meio de sequência", "horas_empurradas": "horas empurradas"}
+               "quebras": "no meio de sequência", "saltos_micra": "saltos de micra", "horas_empurradas": "horas empurradas"}
         linhas = [{"atual (em edição)": None, **{ROT[k]: ind.get(k) for k in ROT}, "regras": cen.regras.texto(),
                    "id": None, "escolhido": ""}]
         for s in salvos:

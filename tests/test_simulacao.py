@@ -131,3 +131,58 @@ def test_gerar_de_novo_mantem_as_travadas():
     avisos = []
     cenario(ofs, [], travadas=pd.DataFrame([{"chave": "OF 99", "maquina": "Power", "ordem": 2}]), avisos=avisos)
     assert any("OF 99" in a for a in avisos)
+
+
+# ----------------------------------------------------------------- regra 9: subida e descida de micra
+
+def _prod(micra):
+    return f"A - FILME STRETCH AUTOMATICO 500 X {micra} X 3 X 18 X 0,9"
+
+
+def test_micras_intermediarias():
+    from core.regras.EncaixeMaquinas import e_salto, micras_intermediarias
+    assert not e_salto(17, 22, 5) and e_salto(17, 25, 5)
+    assert micras_intermediarias(17, 25, 5) == [21.0]
+    assert micras_intermediarias(17, 25, 5, conhecidas=[20, 23]) == [20.0]     # prefere micra que a máquina roda
+    assert micras_intermediarias(30, 12, 5) == [26.0, 21.0, 16.0]                # desce em 3 OFs
+    passos = [30.0] + micras_intermediarias(30, 12, 5) + [12.0]
+    assert all(abs(b - a) <= 5 for a, b in zip(passos, passos[1:])) and len(passos) == 5
+
+
+def test_salto_de_micra_na_fila_e_no_alerta():
+    ofs = [of_form(i, 10 * i, "MN 250%") for i in range(4)]
+    for o, m in zip(ofs, [17, 18, 25, 23]):
+        o["produto"] = _prod(m)
+    cen = cenario(ofs, [], RegrasCenario(salto_micra=5))
+    it = cen.itens.set_index("chave")
+    assert it.loc["OF 2", "salto_micra"].startswith("salto de micra 18 -> 25")
+    assert "salto de micra" in it.loc["OF 2", "alerta"]
+    assert it["salto_micra"].notna().sum() == 1 and indicadores(cen)["saltos_micra"] == 1
+    _, filas, resumo = gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame(columns=list(ped(0, "2026-11-20"))), REGRAS, None,
+                                     {}, agora=INICIO, rank=RANK, salto_micra=5)
+    assert filas["salto_micra"].notna().sum() == 1 and "saltos de micra nas filas (> 5 µ): 1" in resumo
+
+
+def test_encaixe_prefere_posicao_sem_salto_de_micra():
+    # fila 20, 20, 20, 20, 30: o pedido de 21 µ no prazo cabe na 5ª posição (entre 20 e 30) ou no fim (depois do 30)
+    ofs = [of_form(i, 10 * i, "MN 250%") for i in range(5)]
+    for o, m in zip(ofs, [20, 20, 20, 20, 30]):
+        o["produto"] = _prod(m)
+    pedido = ped(1, "2026-11-30", produto=_prod(21))
+    _, filas, _ = gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame([pedido]), REGRAS, None, {}, agora=INICIO, rank=RANK,
+                                salto_micra=5)
+    assert list(filas["micra"]) == [20, 20, 20, 20, 21, 30]
+    _, filas, _ = gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame([{**pedido, "produto": _prod(33)}]), REGRAS, None, {},
+                                agora=INICIO, rank=RANK, salto_micra=5)
+    assert list(filas["micra"]) == [20, 20, 20, 20, 30, 33]
+
+
+def test_agrupar_ordena_a_micra_dentro_do_grupo():
+    forms = ["MN 250%"] * 3 + ["MN 250%", "MN 250%", "MN 250%", "MO 300%", "MO 300%"]
+    micras = [20, 20, 23, 12, 30, 17, 35, 25]
+    ofs = [of_form(i, 10 * i, f) for i, f in enumerate(forms)]
+    for o, m in zip(ofs, micras):
+        o["produto"] = _prod(m)
+    cen = cenario(ofs, [], RegrasCenario(prioridade=FORMULACAO, salto_micra=5))
+    # última fixa 23 está mais perto de 30 que de 12: o MN desce (30, 17, 12); depois o MO sobe a partir de 12
+    assert list(cen.itens["micra"]) == [20, 20, 23, 30, 17, 12, 25, 35]

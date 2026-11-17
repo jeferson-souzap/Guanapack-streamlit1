@@ -10,6 +10,8 @@ ui.cabecalho("Encaixe em máquinas",
              "Sequência de formulação pelo grupo de formulação da OF e o rank do cadastro: com NÃO QUEBRAR o pedido "
              "novo só entra entre OFs cujo rank comporta o dele (no fim da fila sempre pode), mesmo que fique atrasado; "
              "com PODE QUEBRAR ele entra no meio só se for preciso para atender o prazo ou não atrasar outra OF. "
+             f"Micra: entre posições iguais, prefere a que não cria salto maior que {c.params.get('salto_micra', 5):g} µ; "
+             "a fila mostra cada salto com a micra da OF de estoque a gerar entre as duas. "
              "Regras das máquinas e rank das formulações em Cadastros.", ("carteira", "estoque", "solicitacoes", "planejamento"))
 
 # Regra 7: a opção fica salva nos parâmetros; o encaixe roda as duas e mostra a outra nas colunas comparar_*
@@ -29,7 +31,7 @@ st.info(resumo)
 
 novos = pedidos["sugestao"] == "NOVO NA MÁQUINA"
 np_ = pedidos["sugestao"] == "NÃO PROGRAMADA NA MÁQUINA"
-k = st.columns(5)
+k = st.columns(6)
 k[0].metric("Novos na máquina", ui.num(novos.sum()),
             help=f"{ui.num((novos & (pedidos['atende_embarque'] == 'SIM')).sum())} atendem o embarque")
 k[1].metric("Por OF de estoque", ui.num((pedidos["sugestao"] == "OF DE ESTOQUE").sum()))
@@ -38,6 +40,8 @@ k[2].metric("Sem máquina", ui.num(((pedidos["sugestao"] == "SEM MÁQUINA") & pe
 k[3].metric("Não programadas na máquina", ui.num(np_.sum()),
             help="entram antes dos pedidos sem estoque (rev031)")
 k[4].metric("OFs que passam a atrasar", ui.num((filas["atraso"] == "PASSA A ATRASAR").sum()))
+k[5].metric("Saltos de micra", ui.num(filas["salto_micra"].notna().sum()),
+            help="passagens entre OFs seguidas que pedem OF de estoque de micra intermediária (coluna salto_micra)")
 
 aba1, aba2, aba3 = st.tabs(["Pedidos sem estoque", "Fila sugerida por máquina", "Gráfico"])
 with aba1:
@@ -52,7 +56,8 @@ with aba2:
         fila = filas[filas["maquina"] == maq]
         st.caption(f"{len(fila)} OFs · {(fila['situacao'] == 'NOVO').sum()} novas · "
                    f"{(fila['situacao'] == 'NÃO PROGRAMADA').sum()} não programadas · "
-                   f"{(fila['atraso'] == 'PASSA A ATRASAR').sum()} passam a atrasar")
+                   f"{(fila['atraso'] == 'PASSA A ATRASAR').sum()} passam a atrasar · "
+                   f"{fila['salto_micra'].notna().sum()} saltos de micra")
         ui.tabela(fila, f"fila_{maq[:20]}", "enc_fila", busca=False)
     with st.expander("Todas as filas"):
         ui.tabela(filas, "encaixe_filas", "enc_filas")

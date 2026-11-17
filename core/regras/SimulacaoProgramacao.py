@@ -15,7 +15,13 @@ Regras do cenário (RegrasCenario):
 - prioritarios: clientes prioritários primeiro (sim/não);
 - setup_min: minutos a mais em cada troca de grupo de formulação (0 = como o encaixe);
 - maquinas: quais máquinas entram (vazio = todas);
-- fator_kgh: ajuste do kg/h dos pedidos novos (1.0 = mediana do relatório).
+- fator_kgh: ajuste do kg/h dos pedidos novos (1.0 = mediana do relatório);
+- salto_micra: maior diferença de micra entre duas OFs seguidas (regra 9 do encaixe). Acima disso a
+  linha é marcada como salto, com as micras das OFs de estoque a gerar entre as duas.
+
+Subida e descida de micra (17/11/2026): vale na fila inteira, também na troca de grupo de formulação.
+Agrupar por formulação ordena também a micra dentro de cada grupo, continuando da micra da OF
+anterior: se ela está mais perto da menor micra do grupo, o grupo sobe; senão, desce.
 
 Datas da fila (recalcular): cada máquina começa no início da 1ª OF do planejamento; cada OF dura o
 que dura no planejamento (pedido novo: qtde / kg/h da máquina na micra) e mantém o intervalo que
@@ -26,8 +32,9 @@ from dataclasses import asdict, dataclass, field
 
 import pandas as pd
 
-from core.regras.EncaixeMaquinas import (NAO_QUEBRAR, PODE_QUEBRAR, SITUACAO_NAO_PROG, Encaixe, Pedido,
-                                         nivel_formulacao)
+from core.regras import EncaixeMaquinas
+from core.regras.EncaixeMaquinas import (NAO_QUEBRAR, PODE_QUEBRAR, SITUACAO_NAO_PROG, Encaixe, Pedido, e_salto,
+                                         micra_do_produto, nivel_formulacao, texto_salto)
 from core.regras.LimpezaDataframe import extrair_familia, parse_dimensoes
 from core.regras.Prioridade import ListaPrioritarios
 
@@ -47,7 +54,7 @@ OK = "OK"
 COLUNAS = ["chave", "maquina", "ordem", "situacao", "id_of", "pedido", "prog", "cliente", "id_pa", "produto",
            "formulacao", "grupo_formulacao", "nivel_formulacao", "qtde_kg", "dur_h", "intervalo_h",
            "inicio_atual", "fim_atual", "inicio", "fim", "empurrado_h", "data_otd", "atraso", "troca_grupo",
-           "quebra_sequencia", "prioritario", "maquina_original", "roda_em", "alerta"]
+           "quebra_sequencia", "micra", "salto_micra", "prioritario", "maquina_original", "roda_em", "alerta"]
 
 
 @dataclass
@@ -59,6 +66,7 @@ class RegrasCenario:
     setup_min: float = 0.0
     maquinas: list = field(default_factory=list)
     fator_kgh: float = 1.0
+    salto_micra: float = field(default_factory=lambda: EncaixeMaquinas.SALTO_MICRA)
 
     def texto(self) -> str:
         partes = [f"sequência {self.sequencia}", "pelo prazo" if self.prioridade == PRAZO else "agrupado por formulação",
@@ -67,6 +75,7 @@ class RegrasCenario:
             partes.append(f"setup {self.setup_min:g} min/troca")
         if self.fator_kgh != 1:
             partes.append(f"kg/h {self.fator_kgh:.0%}")
+        partes.append(f"salto de micra > {self.salto_micra:g} µ")
         if self.maquinas:
             partes.append("máquinas: " + ", ".join(self.maquinas))
         return " · ".join(partes)
@@ -112,7 +121,7 @@ def gerar_cenario(plan, reserva, regras_maq, prioritarios=None, mapa_otd=None, r
     enc = Encaixe(plan, reserva, regras_maq, prioritarios if regras.prioritarios else ListaPrioritarios([]),
                   mapa_otd, agora, rank=None if regras.sequencia == IGNORAR else rank,
                   pode_quebrar=(regras.sequencia == PODE_QUEBRAR), ordens_fixas=regras.ordens_fixas,
-                  fator_kgh=regras.fator_kgh).executar()
+                  fator_kgh=regras.fator_kgh, salto_micra=regras.salto_micra).executar()
 
     apelidos = [r["apelido"] for r in regras_maq]
     linhas, inicio = [], {}
@@ -137,7 +146,7 @@ def gerar_cenario(plan, reserva, regras_maq, prioritarios=None, mapa_otd=None, r
                 "dur_h": dur.total_seconds() / 3600, "intervalo_h": 0.0 if it.novo else it._intervalo,
                 "inicio_atual": None if it.novo else it.ini0, "fim_atual": None if it.novo else it.fim0,
                 "prazo": it.prazo, "prioritario": bool(it.prioritario), "maquina_original": maq,
-                "roda_em": ", ".join(roda), "micra": parse_dimensoes(it.produto)["micra"],
+                "roda_em": ", ".join(roda), "micra": micra_do_produto(it.produto),
             })
     itens = pd.DataFrame(linhas)
     taxas = {apelidos[m]: dict(t) for m, t in enumerate(enc.taxas)}
@@ -250,8 +259,9 @@ def aplicar_mudancas(cen: Cenario, editado: pd.DataFrame) -> list[str]:
 def agrupar_por_formulacao(cen: Cenario, maquina: str):
     """Agrupa as OFs que não são fixas pela sequência de formulação: a partir do nível da última OF
     fixa sobe (níveis maiores ou iguais, em ordem crescente) e depois desce (os menores, em ordem
-    decrescente). Dentro de cada grupo, fica a ordem atual. Sem nível: no fim. OFs fixas e travadas
-    não saem do lugar."""
+    decrescente). Sem nível: no fim. Dentro de cada grupo a micra sobe ou desce continuando da micra
+    da OF anterior (a que está mais perto: da menor, sobe; da maior, desce); OF sem micra fica no fim
+    do grupo, na ordem atual. OFs fixas e travadas não saem do lugar."""
     it = cen.itens
     if "travada" not in it:
         it["travada"] = False
@@ -271,13 +281,47 @@ def agrupar_por_formulacao(cen: Cenario, maquina: str):
         return (0, n) if n >= ref else (1, -n)
 
     k = niveis.map(chave)
+    micras = [_micra_linha(r) for r in fila.itertuples()]
     ordem_nova = sorted(range(len(fila)), key=lambda j: k.iloc[j])          # estável: mantém a ordem no grupo
+    base_micra = [micras[j] for j in range(len(fila)) if fixas.iloc[j] and micras[j] is not None]
+    ordem_nova = ordenar_micra_nos_grupos(ordem_nova, [k.iloc[j] for j in range(len(fila))], micras,
+                                          base_micra[-1] if base_micra else None)
     fila = fila.assign(pos_alvo=fila["ordem"].astype(float), ordem_alvo=0.0)
     fila.iloc[ordem_nova, fila.columns.get_loc("ordem_alvo")] = list(range(len(fila)))
     fila = _com_travadas(fila, presas).drop(columns=["pos_alvo", "ordem_alvo"])
     it.loc[fila.index, "ordem"] = fila["ordem"]
     cen.itens = it.sort_values(["maquina", "ordem"]).reset_index(drop=True)
     recalcular(cen)
+
+
+def _micra_linha(r) -> float | None:
+    m = getattr(r, "micra", None)
+    if m is None or pd.isna(m):
+        return micra_do_produto(r.produto)
+    return float(m)
+
+
+def ordenar_micra_nos_grupos(ordem: list, grupos: list, micras: list, ultima) -> list:
+    """Dentro de cada grupo seguido de ordem (mesmo valor em grupos), põe a micra em ordem: sobe se a
+    micra anterior (ultima) está mais perto da menor micra do grupo, desce se está mais perto da maior.
+    Sem micra anterior, sobe. OFs sem micra ficam no fim do grupo, na ordem em que estavam."""
+    saida, j = [], 0
+    while j < len(ordem):
+        fim = j
+        while fim < len(ordem) and grupos[ordem[fim]] == grupos[ordem[j]]:
+            fim += 1
+        bloco = ordem[j:fim]
+        com = [x for x in bloco if micras[x] is not None]
+        sem = [x for x in bloco if micras[x] is None]
+        if com:
+            menor = min(micras[x] for x in com)
+            maior = max(micras[x] for x in com)
+            desce = ultima is not None and abs(ultima - maior) < abs(ultima - menor)
+            com = sorted(com, key=lambda x: -micras[x] if desce else micras[x])   # estável no empate
+            ultima = micras[com[-1]]
+        saida += com + sem
+        j = fim
+    return saida
 
 
 # ===================================================================== datas e indicadores
@@ -292,10 +336,18 @@ def recalcular(cen: Cenario) -> Cenario:
     it["travada"] = it["travada"].fillna(False).astype(bool) if "travada" in it else False   # cenário salvo antes da trava
     it["nivel_formulacao"] = pd.Series([_nivel(g, f, cen.rank) for g, f in zip(it["grupo_formulacao"], it["formulacao"])],
                                        index=it.index, dtype=object)
-    inicios, fins, trocas, quebras = [], [], [], []
+    if "micra" not in it:
+        it["micra"] = None
+    it["micra"] = [_micra_linha(r) for r in it.itertuples()]
+    limite = float(cen.regras.salto_micra or 0)
+    inicios, fins, trocas, quebras, saltos = [], [], [], [], []
     for maq, fila in it.groupby("maquina", sort=False):
         t = pd.Timestamp(cen.inicio.get(maq, fila["inicio_atual"].dropna().min()))
         niveis = _herdar(list(fila["nivel_formulacao"]))
+        micras = list(fila["micra"])
+        conhecidas = sorted(cen.taxas.get(maq, {}))
+        saltos += [texto_salto(micras[j - 1], micras[j], limite, conhecidas)
+                   if j > 0 and e_salto(micras[j - 1], micras[j], limite) else None for j in range(len(micras))]
         for j, r in enumerate(fila.itertuples()):
             troca = j > 0 and niveis[j] is not None and niveis[j - 1] is not None and niveis[j] != niveis[j - 1]
             if j > 0:
@@ -312,6 +364,7 @@ def recalcular(cen: Cenario) -> Cenario:
             quebras.append(r.situacao in ENTRAM and None not in (antes, depois, niveis[j])
                            and not (min(antes, depois) <= niveis[j] <= max(antes, depois)))
     it["inicio"], it["fim"], it["troca_grupo"], it["quebra_sequencia"] = inicios, fins, trocas, quebras
+    it["salto_micra"] = saltos
     it["empurrado_h"] = [None if pd.isna(a) else round((i - a).total_seconds() / 3600, 1)
                          for i, a in zip(it["inicio"], it["inicio_atual"])]
     it["data_otd"] = [None if p is None or pd.isna(p) else p - pd.Timedelta(days=1) for p in it["prazo"]]
@@ -357,6 +410,8 @@ def _alerta(r) -> str:
         partes.append(("⚠️ " if r.prioritario else "") + r.atraso.lower())
     if r.quebra_sequencia:
         partes.append("quebra a sequência")
+    if isinstance(r.salto_micra, str):
+        partes.append(r.salto_micra)
     if r.maquina != r.maquina_original:
         partes.append(f"veio da {r.maquina_original}")
     if r.roda_em is not None and r.maquina not in str(r.roda_em).split(", "):
@@ -379,6 +434,7 @@ def indicadores(cen: Cenario) -> dict:
         "prioritarios_fora": int((it["prioritario"] & it["atraso"].isin([NAO_ATENDE, PASSA_A_ATRASAR, JA_ATRASADA])).sum()),
         "trocas_grupo": int(it["troca_grupo"].sum()),
         "quebras": int(it["quebra_sequencia"].sum()),
+        "saltos_micra": int(it["salto_micra"].notna().sum()),
         "horas_empurradas": round(float(pd.to_numeric(it["empurrado_h"], errors="coerce").clip(lower=0).sum()), 1),
         "fim_das_filas": {m: f for m, f in fim.items()},
     }

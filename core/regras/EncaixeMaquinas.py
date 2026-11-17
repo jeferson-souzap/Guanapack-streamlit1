@@ -46,9 +46,17 @@ Regras (combinadas com o usuário em 09 e 10/11/2026):
    sugestao "NÃO PROGRAMADA NA MÁQUINA" (ou SEM MÁQUINA) e a coluna id_of. Uma OF de estoque não
    programada que foi encaixada pode atender pedidos do mesmo produto (regra 2). Pedido da reserva
    que já tem OF não programada (mesmo pedido/prog) fica com ela ("OF NÃO PROGRAMADA").
+9. Subida e descida de micra (17/11/2026, regra do usuário): vale na fila inteira, também na troca de
+   grupo de formulação — a transição entre duas OFs seguidas precisa ser suave. Salto = diferença de
+   micra maior que SALTO_MICRA (parâmetro). Salto não bloqueia: o analista põe uma OF de estoque de
+   micra intermediária entre as duas (ex.: 17 -> 25 pede uma de ~20). Por isso o encaixe só prefere,
+   entre posições iguais nos critérios de prazo e de formulação, a que cria menos saltos novos, e a
+   fila sugerida aponta cada salto com as micras das OFs de estoque a gerar (micras_intermediarias).
 """
+import math
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from statistics import median
 
 import pandas as pd
@@ -60,6 +68,7 @@ from core.regras.LimpezaDataframe import extrair_familia, parse_dimensoes
 ORDENS_FIXAS = 3             # primeiras OFs de cada máquina que não mudam de lugar
 MIN_HORAS_TAXA = 0.25        # OF mais curta que isso não entra na conta do kg/h
 DIAS_OTD = 2                 # data OTD = embarque - 2 dias (pedido sem data no CTLR)
+SALTO_MICRA = 5.0            # regra 9: maior diferença de micra entre duas OFs seguidas sem ser salto
 
 NOVO = "NOVO NA MÁQUINA"
 OF_ESTOQUE = "OF DE ESTOQUE"
@@ -154,6 +163,7 @@ class Opcao:
     taxa_origem: str = ""
     mesma_formulacao: bool = False   # fica ao lado de OF da mesma formulação (não cria troca de formulação)
     quebra: bool = False             # entra no meio de uma sequência de formulação (só com PODE QUEBRAR)
+    saltos_micra: int = 0            # regra 9: saltos de micra novos que a posição cria na fila
 
 
 def _texto(valor) -> str:
@@ -216,6 +226,50 @@ def nivel_formulacao(texto, rank: dict | None) -> int | None:
     return None
 
 
+@lru_cache(maxsize=None)
+def micra_do_produto(produto) -> float | None:
+    """Micra da descrição técnica (None se não tiver)."""
+    if not isinstance(produto, str):
+        return None
+    micra = parse_dimensoes(produto)["micra"]
+    return None if pd.isna(micra) else float(micra)
+
+
+def _micra(valor) -> float | None:
+    return None if valor is None or pd.isna(valor) else float(valor)
+
+
+def e_salto(a, b, limite) -> bool:
+    """Regra 9: de a para b (micras de duas OFs seguidas) é salto? Sem micra ou limite <= 0: não."""
+    a, b = _micra(a), _micra(b)
+    return a is not None and b is not None and bool(limite) and limite > 0 and abs(b - a) > limite + 1e-9
+
+
+def micras_intermediarias(a, b, limite, conhecidas=()) -> list[float]:
+    """Micras das OFs de estoque para pôr entre a e b sem nenhum passo maior que limite.
+    Faltam ceil(|b - a| / limite) - 1 OFs. Cada uma fica perto do ponto que divide o que falta em
+    partes iguais; prefere uma micra que a máquina já roda (conhecidas) e que ainda deixa chegar em b."""
+    if not e_salto(a, b, limite):
+        return []
+    a, b = float(a), float(b)
+    n = math.ceil(abs(b - a) / limite - 1e-9) - 1
+    saida, atual = [], a
+    for k in range(n):
+        faltam = n - k                                       # OFs a pôr, contando esta
+        ideal = atual + (b - atual) / (faltam + 1)
+        ok = [float(c) for c in conhecidas
+              if abs(c - atual) <= limite + 1e-9 and abs(b - c) <= limite * faltam + 1e-9]
+        atual = min(ok, key=lambda c: (abs(c - ideal), c)) if ok else float(round(ideal))
+        saida.append(atual)
+    return saida
+
+
+def texto_salto(a, b, limite, conhecidas=()) -> str:
+    """Ex.: "salto de micra 17 -> 25: gerar OF de estoque de 21 µ antes"."""
+    meio = " e ".join(f"{_fmt(x)} µ" for x in micras_intermediarias(a, b, limite, conhecidas))
+    return f"salto de micra {_fmt(a)} -> {_fmt(b)}: gerar OF de estoque de {meio} antes"
+
+
 def chave_pedido(pedido, prog) -> str:
     return f"{_texto(pedido)}|{_texto(prog)}"
 
@@ -224,8 +278,9 @@ class Encaixe:
     def __init__(self, plan: pd.DataFrame, reserva: pd.DataFrame, regras: list[dict],
                  prioritarios: ListaPrioritarios | None = None, mapa_otd: dict | None = None, agora=None,
                  rank: dict | None = None, pode_quebrar: bool = False,
-                 ordens_fixas: int | None = None, fator_kgh: float = 1.0):
+                 ordens_fixas: int | None = None, fator_kgh: float = 1.0, salto_micra: float | None = None):
         self.regras = regras
+        self.salto_micra = SALTO_MICRA if salto_micra is None else float(salto_micra)   # regra 9
         self.rank = dict(rank or {})       # formulação -> nível (vazio = não confere a sequência)
         self.pode_quebrar = pode_quebrar   # regra 7
         # simulação: quantas OFs ficam fixas e ajuste do kg/h (1.0 = mediana do relatório)
@@ -486,12 +541,16 @@ class Encaixe:
                 return not a.quebra
             if a.fim != b.fim:
                 return a.fim < b.fim
-            return a.n_atrasos < b.n_atrasos
+            if a.n_atrasos != b.n_atrasos:
+                return a.n_atrasos < b.n_atrasos
+            return a.saltos_micra < b.saltos_micra
         if a.atende:
             if a.n_atrasos != b.n_atrasos:
                 return a.n_atrasos < b.n_atrasos
             if a.quebra != b.quebra:
                 return not a.quebra
+            if a.saltos_micra != b.saltos_micra:              # regra 9: transição de micra suave
+                return a.saltos_micra < b.saltos_micra
             if a.mesma_formulacao != b.mesma_formulacao:      # regra 6: evita troca de formulação a mais
                 return a.mesma_formulacao
             if a.junto != b.junto:
@@ -505,6 +564,8 @@ class Encaixe:
             return a.fim < b.fim
         if a.n_atrasos != b.n_atrasos:
             return a.n_atrasos < b.n_atrasos
+        if a.saltos_micra != b.saltos_micra:
+            return a.saltos_micra < b.saltos_micra
         return a.junto and not b.junto
 
     def encaixar_pedido(self, p: Pedido):
@@ -525,6 +586,7 @@ class Encaixe:
             fila = self.filas[m]
             ult_fixa = max((j + 1 for j, it in enumerate(fila) if it.fixa), default=0)
             niveis = self.niveis_da_fila(m)
+            micras = [micra_do_produto(it.produto) for it in fila]
             for pos in range(ult_fixa + 1, len(fila) + 2):
                 quebra = self.quebra_sequencia(niveis, pos, nivel)
                 if quebra and not self.pode_quebrar:
@@ -533,6 +595,10 @@ class Encaixe:
                 op.kgh, op.taxa_origem, op.quebra = kgh, origem, quebra
                 op.mesma_formulacao = nivel is not None and (
                     (pos > 1 and niveis[pos - 2] == nivel) or (pos <= len(niveis) and niveis[pos - 1] == nivel))
+                antes = micras[pos - 2] if pos > 1 else None
+                depois = micras[pos - 1] if pos <= len(micras) else None
+                op.saltos_micra = (e_salto(antes, p.micra, self.salto_micra) + e_salto(p.micra, depois, self.salto_micra)
+                                   - e_salto(antes, depois, self.salto_micra))
                 if self.melhor_que(op, melhor):
                     melhor = op
         if melhor is None:
@@ -573,8 +639,8 @@ class Encaixe:
                        "cliente_prioritario", "quebra_sequencia", "id_of"]
     COLUNAS_FILAS = ["maquina", "seq", "situacao", "id_of", "firmado", "pedido", "prog", "cliente", "id_pa", "produto",
                      "formulacao", "grupo_formulacao", "nivel_formulacao", "qtde_kg", "inicio_atual", "fim_atual",
-                     "inicio_sugerido", "fim_sugerido", "empurrado_h", "data_otd", "atraso", "observacao",
-                     "cliente_prioritario"]
+                     "inicio_sugerido", "fim_sugerido", "empurrado_h", "data_otd", "atraso", "micra", "salto_micra",
+                     "observacao", "cliente_prioritario"]
 
     def tabela_pedidos(self) -> pd.DataFrame:
         linhas = []
@@ -611,6 +677,8 @@ class Encaixe:
         linhas = []
         for m, fila in enumerate(self.filas):
             niveis = self.niveis_da_fila(m)
+            micras = [micra_do_produto(it.produto) for it in fila]
+            conhecidas = sorted(self.taxas[m])
             for j, it in enumerate(fila, start=1):
                 atraso = None
                 if it.prazo is not None:
@@ -639,10 +707,21 @@ class Encaixe:
                     "inicio_sugerido": it.ini, "fim_sugerido": it.fim,
                     "empurrado_h": None if it.novo else round((it.ini - it.ini0).total_seconds() / 3600, 1),
                     "data_otd": None if it.prazo is None else it.prazo - pd.Timedelta(days=1),
-                    "atraso": atraso, "observacao": observacao,
+                    "atraso": atraso, "micra": micras[j - 1],
+                    "salto_micra": (texto_salto(micras[j - 2], micras[j - 1], self.salto_micra, conhecidas)
+                                    if j > 1 and e_salto(micras[j - 2], micras[j - 1], self.salto_micra) else None),
+                    "observacao": observacao,
                     "cliente_prioritario": "SIM" if it.prioritario else None,
                 })
         return pd.DataFrame(linhas, columns=self.COLUNAS_FILAS)
+
+    def saltos_micra(self) -> int:
+        """Regra 9: quantas passagens entre OFs seguidas, em todas as filas, são salto de micra."""
+        total = 0
+        for fila in self.filas:
+            micras = [micra_do_produto(it.produto) for it in fila]
+            total += sum(e_salto(a, b, self.salto_micra) for a, b in zip(micras, micras[1:]))
+        return total
 
     def _resumo_nao_prog(self) -> str:
         """Regra 8: quantas OFs não programadas entraram e quantas ficaram sem máquina."""
@@ -673,7 +752,8 @@ class Encaixe:
         extra2 = f" | já com OF não programada: {ligados}" if ligados else ""
         return (f"{self._resumo_nao_prog()}{len(self.pedidos)} pedidos sem estoque | {opcao} a sequência de formulação | "
                 f"novos na máquina: {len(novos)} ({atendem} atendem o embarque{extra})"
-                f" | por OF de estoque: {estoque}{extra2} | sem máquina: {sem}")
+                f" | por OF de estoque: {estoque}{extra2} | sem máquina: {sem}"
+                f" | saltos de micra nas filas (> {_fmt(self.salto_micra)} µ): {self.saltos_micra()}")
 
 
 def _chave_linha(r) -> str:
@@ -705,16 +785,16 @@ def _comparar(pedidos: pd.DataFrame, outra: "Encaixe", opcao_outra: str) -> tupl
 
 
 def gerar_encaixe(plan, reserva, regras, prioritarios=None, mapa_otd=None, agora=None, rank=None,
-                  opcao: str = NAO_QUEBRAR):
+                  opcao: str = NAO_QUEBRAR, salto_micra: float | None = None):
     """Roda o encaixe e devolve (pedidos, filas, resumo). rank = {formulação: rank} do cadastro de
     formulações, para não quebrar a sequência de formulação das máquinas (regra 6).
     opcao = NÃO QUEBRAR / PODE QUEBRAR (regra 7): roda também a outra opção, que vai nas colunas
     comparar_* da tabela de pedidos e no fim do resumo."""
     opcao = PODE_QUEBRAR if str(opcao).strip().upper() == PODE_QUEBRAR else NAO_QUEBRAR
     outra = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank,
-                    pode_quebrar=(outra_opcao(opcao) == PODE_QUEBRAR)).executar()
+                    pode_quebrar=(outra_opcao(opcao) == PODE_QUEBRAR), salto_micra=salto_micra).executar()
     enc = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank,
-                  pode_quebrar=(opcao == PODE_QUEBRAR)).executar()
+                  pode_quebrar=(opcao == PODE_QUEBRAR), salto_micra=salto_micra).executar()
     pedidos, difere = _comparar(enc.tabela_pedidos(), outra, outra_opcao(opcao))
     resumo = (f"{enc.resumo()} || comparação, {outra_opcao(opcao)}: {outra.resumo_novos()} "
               f"({difere} pedidos mudam)")

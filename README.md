@@ -45,8 +45,8 @@ Início e na barra lateral.
 | Módulo | O que mostra |
 |---|---|
 | **Início** | Situação dos relatórios e atalhos |
-| **Simulação da programação** | Cenários de fila: regras (sequência de formulação, prazo × formulação, setup, OFs fixas), ajuste à mão, travas, desfazer, Gantt e cenários salvos para comparar |
-| **Encaixe em máquinas** | Onde produzir os pedidos sem estoque, fila sugerida e gráfico de Gantt por máquina |
+| **Simulação da programação** | Cenários de fila: regras (sequência de formulação, subida e descida de micra, prazo × formulação, setup, OFs fixas), ajuste à mão, travas, desfazer, Gantt e cenários salvos para comparar |
+| **Encaixe em máquinas** | Onde produzir os pedidos sem estoque, fila sugerida (com os saltos de micra e a OF de estoque intermediária a gerar) e gráfico de Gantt por máquina |
 | **Cadastros** | Rank de formulações, clientes prioritários e regras das máquinas (edição como planilha) |
 | **Configuração** | Pasta por usuário/PC, nomes dos arquivos, parâmetros das regras, módulos e backup |
 
@@ -90,6 +90,7 @@ Editáveis em Configuração > Parâmetros (padrões da planilha rev027):
 | Micra aceita no alternativo | ±2 |
 | Degraus que o alternativo pode subir no rank | 1 |
 | Primeiras OFs fixas de cada máquina no encaixe | 3 |
+| Salto de micra: maior diferença entre duas OFs seguidas | 5 µ |
 | Dias de tolerância para relatório antigo | 0 |
 
 ## Como funciona o cálculo

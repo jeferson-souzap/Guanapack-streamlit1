@@ -45,6 +45,7 @@ def _aplicar_parametros(p: dict):
     """Os módulos de regra leem estas constantes na hora do cálculo."""
     AtrasoOtd.DIAS_OTD = EncaixeMaquinas.DIAS_OTD = int(p["dias_otd"])
     EncaixeMaquinas.ORDENS_FIXAS = int(p["ordens_fixas"])
+    EncaixeMaquinas.SALTO_MICRA = float(p["salto_micra"])
     ReservaCarteira.TOLERANCIA_QTD = float(p["tolerancia_qtd"])
     ReservaCarteira.TOLERANCIA_MICRA = float(p["tolerancia_micra"])
     ReservaCarteira.MAX_DEGRAUS_FORMULACAO = int(p["max_degraus_formulacao"])
@@ -113,7 +114,7 @@ def etapa_encaixe(chave_reserva: tuple, chave_atraso: tuple, sig_plan, maquinas:
     rank = dict(chave_reserva[3])          # cadastro de formulações: sequência de formulação da máquina
     opcao = PODE_QUEBRAR if int(dict(params).get("pode_quebrar_sequencia", 0)) else NAO_QUEBRAR   # regra 7
     return gerar_encaixe(stretch, reserva, regras, ListaPrioritarios([dict(l) for l in prioritarios]), mapa,
-                         rank=rank, opcao=opcao)
+                         rank=rank, opcao=opcao, salto_micra=float(dict(params).get("salto_micra", 5.0)))
 
 
 def entradas_encaixe(chave_reserva: tuple, chave_atraso: tuple, sig_plan, maquinas: tuple, prioritarios: tuple,
