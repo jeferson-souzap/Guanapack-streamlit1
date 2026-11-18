@@ -17,7 +17,8 @@ Regras do cenário (RegrasCenario):
 - maquinas: quais máquinas entram (vazio = todas);
 - fator_kgh: ajuste do kg/h dos pedidos novos (1.0 = mediana do relatório);
 - salto_micra: maior diferença de micra entre duas OFs seguidas (regra 9 do encaixe). Acima disso a
-  linha é marcada como salto, com as micras das OFs de estoque a gerar entre as duas.
+  linha é marcada como salto, com as micras das OFs de estoque a gerar entre as duas;
+- encaixar_alternativos: encaixa também os pedidos atendidos só por estoque alternativo (regra 10).
 
 Subida e descida de micra (17/11/2026): vale na fila inteira, também na troca de grupo de formulação.
 Agrupar por formulação ordena também a micra dentro de cada grupo, continuando da micra da OF
@@ -67,6 +68,7 @@ class RegrasCenario:
     maquinas: list = field(default_factory=list)
     fator_kgh: float = 1.0
     salto_micra: float = field(default_factory=lambda: EncaixeMaquinas.SALTO_MICRA)
+    encaixar_alternativos: bool = field(default_factory=lambda: EncaixeMaquinas.ENCAIXAR_ALTERNATIVOS)
 
     def texto(self) -> str:
         partes = [f"sequência {self.sequencia}", "pelo prazo" if self.prioridade == PRAZO else "agrupado por formulação",
@@ -76,6 +78,8 @@ class RegrasCenario:
         if self.fator_kgh != 1:
             partes.append(f"kg/h {self.fator_kgh:.0%}")
         partes.append(f"salto de micra > {self.salto_micra:g} µ")
+        if self.encaixar_alternativos:
+            partes.append("encaixa os alternativos")
         if self.maquinas:
             partes.append("máquinas: " + ", ".join(self.maquinas))
         return " · ".join(partes)
@@ -121,7 +125,8 @@ def gerar_cenario(plan, reserva, regras_maq, prioritarios=None, mapa_otd=None, r
     enc = Encaixe(plan, reserva, regras_maq, prioritarios if regras.prioritarios else ListaPrioritarios([]),
                   mapa_otd, agora, rank=None if regras.sequencia == IGNORAR else rank,
                   pode_quebrar=(regras.sequencia == PODE_QUEBRAR), ordens_fixas=regras.ordens_fixas,
-                  fator_kgh=regras.fator_kgh, salto_micra=regras.salto_micra).executar()
+                  fator_kgh=regras.fator_kgh, salto_micra=regras.salto_micra,
+                  encaixar_alternativos=regras.encaixar_alternativos).executar()
 
     apelidos = [r["apelido"] for r in regras_maq]
     linhas, inicio = [], {}

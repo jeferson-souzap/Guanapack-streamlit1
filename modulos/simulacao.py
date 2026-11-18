@@ -37,13 +37,18 @@ with st.form("sim_regras"):
                            help="Duas OFs seguidas com diferença de micra maior que isso são salto: a linha mostra a "
                                 "micra da OF de estoque a gerar entre elas (vale na fila toda, também entre formulações)")
     prior = h.toggle("Clientes prioritários primeiro", value=True)
+    alternativos = h.toggle("Encaixar pedidos com estoque alternativo",
+                            value=bool(int(c.params.get("encaixar_alternativos", 0))),
+                            help="Ligado: os pedidos que a reserva atende só com produto alternativo também entram na "
+                                 "fila, para comparar produzir o exato com usar o alternativo")
     manter = h.toggle("Manter as OFs travadas", value=True,
                       help="As OFs travadas (🔒) do cenário atual ficam na mesma máquina e posição na sugestão nova")
     gerar = st.form_submit_button("Gerar sugestão", type="primary")
 
 regras = S.RegrasCenario(sequencia=seq, prioridade=pri, ordens_fixas=int(fixas), prioritarios=prior,
                          setup_min=float(setup), maquinas=maqs if len(maqs) < len(MAQUINAS) else [],
-                         fator_kgh=fator / 100, salto_micra=float(salto))
+                         fator_kgh=fator / 100, salto_micra=float(salto),
+                         encaixar_alternativos=bool(alternativos))
 
 
 def _novo_cenario():

@@ -89,6 +89,8 @@ PARAMETROS = {
                   "(só quando é preciso para atender o prazo ou não atrasar outra OF)", "Encaixe"),
         Parametro("salto_micra", 5.0, "float", "Maior diferença de micra entre duas OFs seguidas na máquina; acima "
                   "disso é salto e precisa de OF de estoque de micra intermediária (encaixe e simulação)", "Encaixe"),
+        Parametro("encaixar_alternativos", 0, "int", "Encaixe e simulação: 1 = encaixa também os pedidos que a reserva "
+                  "atende só com estoque alternativo; 0 = só os pedidos sem estoque", "Encaixe"),
         Parametro("dias_tolerancia_relatorio", 0, "int", "Relatório salvo há mais de N dias recebe aviso (0 = só hoje passa)", "Relatórios"),
     ]
 }

@@ -185,3 +185,20 @@ def test_sem_pedido_sem_estoque_as_tabelas_saem_com_as_colunas():
                                        None, {}, agora=INICIO)
     for col in ("maquina", "situacao", "atraso", "inicio_sugerido", "fim_sugerido"):
         assert col in filas_vazias
+
+
+def test_alternativos_so_entram_com_a_opcao_ligada():
+    # Regra 10: pedido atendido por estoque alternativo fica fora, a não ser que a opção esteja ligada
+    alt = {**ped(1, "2026-11-20"), "tem_estoque": "SIM", "atendimento": "ALTERNATIVO",
+           "alternativo_usado": "micra 19 no lugar de 18"}
+    exato = {**ped(2, "2026-11-20"), "tem_estoque": "SIM", "atendimento": "EXATO", "alternativo_usado": None}
+    sem = ped(3, "2026-11-20")
+    ofs = [of(i, 10 * i) for i in range(4)]
+    desligado, _, _ = encaixar(ofs, [alt, exato, sem])
+    assert list(desligado.num_pedido) == ["3"] and desligado.estoque_alternativo.isna().all()
+    ligado, filas, resumo = gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame([alt, exato, sem]), REGRAS, None, {},
+                                          agora=INICIO, encaixar_alternativos=True)
+    assert sorted(ligado.num_pedido) == ["1", "3"]
+    assert ligado.set_index("num_pedido").loc["1", "estoque_alternativo"] == "micra 19 no lugar de 18"
+    assert filas.observacao.str.contains("tem estoque alternativo", na=False).sum() == 1
+    assert "1 com estoque alternativo" in resumo

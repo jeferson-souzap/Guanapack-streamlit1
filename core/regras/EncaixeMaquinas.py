@@ -2,7 +2,8 @@
 Encaixe em máquina dos pedidos sem estoque (mesmas regras do modEncaixe da planilha Excel, rev030).
 
 Entradas: o planejamento das extrusoras de stretch (fila atual de cada máquina), a reserva da
-carteira (pedidos com tem_estoque = "NÃO"), as regras das máquinas, a lista de clientes
+carteira (pedidos com tem_estoque = "NÃO"; com a opção ENCAIXAR_ALTERNATIVOS também os atendidos só por
+estoque ALTERNATIVO), as regras das máquinas, a lista de clientes
 prioritários e a data OTD de cada pedido (ver AtrasoOtd).
 
 Regras (combinadas com o usuário em 09 e 10/11/2026):
@@ -52,6 +53,11 @@ Regras (combinadas com o usuário em 09 e 10/11/2026):
    micra intermediária entre as duas (ex.: 17 -> 25 pede uma de ~20). Por isso o encaixe só prefere,
    entre posições iguais nos critérios de prazo e de formulação, a que cria menos saltos novos, e a
    fila sugerida aponta cada salto com as micras das OFs de estoque a gerar (micras_intermediarias).
+10. Pedidos com estoque alternativo (18/11/2026, opção do usuário): com ENCAIXAR_ALTERNATIVOS ligado,
+   os pedidos que a reserva atende só com produto ALTERNATIVO também entram no encaixe, com as
+   mesmas regras dos pedidos sem estoque, para o analista comparar produzir o exato com usar o
+   alternativo. A tabela de pedidos mostra o alternativo na coluna estoque_alternativo e a fila
+   sugerida avisa na observação. Desligado (padrão), só entram os pedidos sem estoque.
 """
 import math
 import re
@@ -69,6 +75,7 @@ ORDENS_FIXAS = 3             # primeiras OFs de cada máquina que não mudam de 
 MIN_HORAS_TAXA = 0.25        # OF mais curta que isso não entra na conta do kg/h
 DIAS_OTD = 2                 # data OTD = embarque - 2 dias (pedido sem data no CTLR)
 SALTO_MICRA = 5.0            # regra 9: maior diferença de micra entre duas OFs seguidas sem ser salto
+ENCAIXAR_ALTERNATIVOS = False  # regra 10: encaixa também os pedidos atendidos só por estoque alternativo
 
 NOVO = "NOVO NA MÁQUINA"
 OF_ESTOQUE = "OF DE ESTOQUE"
@@ -102,6 +109,7 @@ class Item:
     formulacao: str = ""
     grupo_form: str = ""                   # grupo_form do planejamento; pedido novo: formulação da carteira
     quebra: bool = False                   # pedido novo que entrou no meio de uma sequência (PODE QUEBRAR)
+    alternativo: str = ""                  # regra 10: pedido novo que tinha estoque alternativo
     qtde: float = 0.0
     ini0: pd.Timestamp | None = None
     fim0: pd.Timestamp | None = None
@@ -144,6 +152,7 @@ class Pedido:
     nao_prog: bool = False
     prazo_of: pd.Timestamp | None = None   # 1º instante já atrasado (None = sem prazo)
     estoque: bool = False                  # OF sem pedido (pode atender pedidos depois)
+    alternativo: str = ""                  # regra 10: estoque alternativo que a reserva achou (vazio = sem estoque)
 
 
 @dataclass
@@ -278,8 +287,11 @@ class Encaixe:
     def __init__(self, plan: pd.DataFrame, reserva: pd.DataFrame, regras: list[dict],
                  prioritarios: ListaPrioritarios | None = None, mapa_otd: dict | None = None, agora=None,
                  rank: dict | None = None, pode_quebrar: bool = False,
-                 ordens_fixas: int | None = None, fator_kgh: float = 1.0, salto_micra: float | None = None):
+                 ordens_fixas: int | None = None, fator_kgh: float = 1.0, salto_micra: float | None = None,
+                 encaixar_alternativos: bool | None = None):
         self.regras = regras
+        self.encaixar_alternativos = (ENCAIXAR_ALTERNATIVOS if encaixar_alternativos is None
+                                      else bool(encaixar_alternativos))                   # regra 10
         self.salto_micra = SALTO_MICRA if salto_micra is None else float(salto_micra)   # regra 9
         self.rank = dict(rank or {})       # formulação -> nível (vazio = não confere a sequência)
         self.pode_quebrar = pode_quebrar   # regra 7
@@ -387,7 +399,11 @@ class Encaixe:
         pedidos = []
         if reserva is None or reserva.empty:
             return pedidos
-        sem = reserva[reserva["tem_estoque"].astype(str).str.strip().str.upper() == "NÃO"]
+        tem = reserva["tem_estoque"].astype(str).str.strip().str.upper()
+        entra = tem == "NÃO"
+        if self.encaixar_alternativos and "atendimento" in reserva:           # regra 10
+            entra |= (tem == "SIM") & (reserva["atendimento"].astype(str).str.strip().str.upper() == "ALTERNATIVO")
+        sem = reserva[entra]
         for _, r in sem.iterrows():
             produto = _texto(r["produto"])
             dims = parse_dimensoes(produto)
@@ -399,6 +415,8 @@ class Encaixe:
                        largura=dims["largura"], micra=dims["micra"], peso=dims["peso"],
                        tubete=0.0 if pd.isna(tubete) else float(tubete),
                        prioritario=self.prioritarios.pedido_prioritario(r["cliente"], produto, r["formulacao"]))
+            if str(r["tem_estoque"]).strip().upper() == "SIM":
+                p.alternativo = _texto(r.get("alternativo_usado")) or "alternativo"
             pedidos.append(p)
         # Prioritários primeiro, depois embarque, pedido e programação (ordenação estável)
         return sorted(pedidos, key=lambda p: (not p.prioritario, p.embarque, _num(p.num_pedido), _num(p.prog)))
@@ -614,7 +632,7 @@ class Encaixe:
                     id_pa=p.id_pa, produto=p.produto, formulacao=p.formulacao, grupo_form=p.formulacao,
                     quebra=melhor.quebra, qtde=p.qtde,
                     ini=melhor.ini, fim=melhor.fim, prazo=limite, kgh=melhor.kgh,
-                    taxa_origem=melhor.taxa_origem, prioritario=p.prioritario)
+                    taxa_origem=melhor.taxa_origem, prioritario=p.prioritario, alternativo=p.alternativo)
         if p.nao_prog:                                     # regra 8: continua sendo a OF do planejamento
             novo.nao_prog, novo.id_of, novo.firmado = True, p.id_of, p.firmado
             novo.cap_livre = p.qtde if p.estoque else 0.0
@@ -636,7 +654,7 @@ class Encaixe:
     COLUNAS_PEDIDOS = ["num_pedido", "prog", "cliente", "dt_embarque", "data_otd", "id_pa", "produto", "formulacao",
                        "qtde_kg", "sugestao", "maquina", "depois_de", "inicio_previsto", "fim_previsto",
                        "atende_embarque", "kg_h", "kg_h_origem", "ofs_que_passam_a_atrasar", "maquinas_que_nao_rodam",
-                       "cliente_prioritario", "quebra_sequencia", "id_of"]
+                       "cliente_prioritario", "quebra_sequencia", "id_of", "estoque_alternativo"]
     COLUNAS_FILAS = ["maquina", "seq", "situacao", "id_of", "firmado", "pedido", "prog", "cliente", "id_pa", "produto",
                      "formulacao", "grupo_formulacao", "nivel_formulacao", "qtde_kg", "inicio_atual", "fim_atual",
                      "inicio_sugerido", "fim_sugerido", "empurrado_h", "data_otd", "atraso", "micra", "salto_micra",
@@ -656,7 +674,7 @@ class Encaixe:
                      "maquinas_que_nao_rodam": " | ".join(p.bloqueios) or None,
                      "cliente_prioritario": "SIM" if p.prioritario else None,
                      "quebra_sequencia": "SIM" if p.tipo in (NOVO, NAO_PROG_NA_MAQUINA) and p.quebra else None,
-                     "id_of": p.id_of or None}
+                     "id_of": p.id_of or None, "estoque_alternativo": p.alternativo or None}
             it = p.item
             if it is not None:
                 linha.update(maquina=self.regras[it.maq]["apelido"], inicio_previsto=it.ini, fim_previsto=it.fim,
@@ -694,6 +712,8 @@ class Encaixe:
                     texto = f"kg/h {round(it.kgh)} ({it.taxa_origem})"
                     if it.quebra:
                         texto += " | QUEBRA a sequência de formulação"
+                    if it.alternativo:
+                        texto += f" | tem estoque alternativo ({it.alternativo})"
                     observacao = texto if observacao is None else f"{texto} | {observacao}"
                 linhas.append({
                     "maquina": self.regras[m]["apelido"], "seq": j,
@@ -750,7 +770,10 @@ class Encaixe:
         opcao = PODE_QUEBRAR if self.pode_quebrar else NAO_QUEBRAR
         extra = f", {quebram} {'quebra' if quebram == 1 else 'quebram'} a sequência" if quebram else ""
         extra2 = f" | já com OF não programada: {ligados}" if ligados else ""
-        return (f"{self._resumo_nao_prog()}{len(self.pedidos)} pedidos sem estoque | {opcao} a sequência de formulação | "
+        alt = sum(1 for p in self.pedidos if p.alternativo)
+        qtd = (f"{len(self.pedidos)} pedidos sem estoque ({alt} com estoque alternativo)" if self.encaixar_alternativos
+               else f"{len(self.pedidos)} pedidos sem estoque")
+        return (f"{self._resumo_nao_prog()}{qtd} | {opcao} a sequência de formulação | "
                 f"novos na máquina: {len(novos)} ({atendem} atendem o embarque{extra})"
                 f" | por OF de estoque: {estoque}{extra2} | sem máquina: {sem}"
                 f" | saltos de micra nas filas (> {_fmt(self.salto_micra)} µ): {self.saltos_micra()}")
@@ -785,16 +808,19 @@ def _comparar(pedidos: pd.DataFrame, outra: "Encaixe", opcao_outra: str) -> tupl
 
 
 def gerar_encaixe(plan, reserva, regras, prioritarios=None, mapa_otd=None, agora=None, rank=None,
-                  opcao: str = NAO_QUEBRAR, salto_micra: float | None = None):
+                  opcao: str = NAO_QUEBRAR, salto_micra: float | None = None,
+                  encaixar_alternativos: bool | None = None):
     """Roda o encaixe e devolve (pedidos, filas, resumo). rank = {formulação: rank} do cadastro de
     formulações, para não quebrar a sequência de formulação das máquinas (regra 6).
     opcao = NÃO QUEBRAR / PODE QUEBRAR (regra 7): roda também a outra opção, que vai nas colunas
     comparar_* da tabela de pedidos e no fim do resumo."""
     opcao = PODE_QUEBRAR if str(opcao).strip().upper() == PODE_QUEBRAR else NAO_QUEBRAR
     outra = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank,
-                    pode_quebrar=(outra_opcao(opcao) == PODE_QUEBRAR), salto_micra=salto_micra).executar()
+                    pode_quebrar=(outra_opcao(opcao) == PODE_QUEBRAR), salto_micra=salto_micra,
+                    encaixar_alternativos=encaixar_alternativos).executar()
     enc = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank,
-                  pode_quebrar=(opcao == PODE_QUEBRAR), salto_micra=salto_micra).executar()
+                  pode_quebrar=(opcao == PODE_QUEBRAR), salto_micra=salto_micra,
+                    encaixar_alternativos=encaixar_alternativos).executar()
     pedidos, difere = _comparar(enc.tabela_pedidos(), outra, outra_opcao(opcao))
     resumo = (f"{enc.resumo()} || comparação, {outra_opcao(opcao)}: {outra.resumo_novos()} "
               f"({difere} pedidos mudam)")

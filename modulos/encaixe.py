@@ -17,7 +17,7 @@ ui.cabecalho("Encaixe em máquinas",
 # Regra 7: a opção fica salva nos parâmetros; o encaixe roda as duas e mostra a outra nas colunas comparar_*
 opcoes = ["NÃO QUEBRAR", "PODE QUEBRAR"]
 atual = 1 if int(c.params.get("pode_quebrar_sequencia", 0)) else 0
-col_seq, col_micra = st.columns([3, 1])
+col_seq, col_alt, col_micra = st.columns([2, 1.3, 1])
 escolha = col_seq.radio("Sequência de formulação", opcoes, index=atual, horizontal=True,
                         help="As filas das máquinas seguem esta opção; as colunas comparar_* dos pedidos mostram a outra.")
 if opcoes.index(escolha) != atual:
@@ -32,6 +32,15 @@ salto = col_micra.number_input("Salto de micra acima de (µ)", min_value=0.0, ma
 if salto != salto_atual:
     contexto.salvar_parametro("salto_micra", salto)
     st.rerun()
+# Regra 10: fica salvo nos parâmetros e vale também como padrão da simulação
+alt_atual = bool(int(c.params.get("encaixar_alternativos", 0)))
+alt = col_alt.toggle("Encaixar pedidos com estoque alternativo", value=alt_atual,
+                     help="Ligado: os pedidos que a reserva atende só com produto alternativo também entram no encaixe "
+                          "(coluna estoque_alternativo), para você decidir entre produzir o exato ou usar o "
+                          "alternativo. Desligado: só os pedidos sem estoque. Fica salvo para todos.")
+if alt != alt_atual:
+    contexto.salvar_parametro("encaixar_alternativos", int(alt))
+    st.rerun()
 
 enc = ui.calcular(c.encaixe)
 if enc is None:
@@ -41,7 +50,7 @@ st.info(resumo)
 
 novos = pedidos["sugestao"] == "NOVO NA MÁQUINA"
 np_ = pedidos["sugestao"] == "NÃO PROGRAMADA NA MÁQUINA"
-k = st.columns(6)
+k = st.columns(7 if alt_atual else 6)
 k[0].metric("Novos na máquina", ui.num(novos.sum()),
             help=f"{ui.num((novos & (pedidos['atende_embarque'] == 'SIM')).sum())} atendem o embarque")
 k[1].metric("Por OF de estoque", ui.num((pedidos["sugestao"] == "OF DE ESTOQUE").sum()))
@@ -52,7 +61,13 @@ k[3].metric("Não programadas na máquina", ui.num(np_.sum()),
 k[4].metric("OFs que passam a atrasar", ui.num((filas["atraso"] == "PASSA A ATRASAR").sum()))
 k[5].metric("Saltos de micra", ui.num(filas["salto_micra"].notna().sum()),
             help="passagens entre OFs seguidas que pedem OF de estoque de micra intermediária (coluna salto_micra)")
+if alt_atual:
+    k[6].metric("Com estoque alternativo", ui.num(pedidos["estoque_alternativo"].notna().sum()),
+                help="pedidos que a reserva atende com produto alternativo e que entraram no encaixe")
 
+if alt_atual:
+    st.caption("Pedidos com estoque alternativo estão no encaixe: a coluna estoque_alternativo mostra o produto que a "
+               "reserva usaria; se você encaixar, lembre de não reservar esse estoque.")
 aba1, aba2, aba3 = st.tabs(["Pedidos sem estoque", "Fila sugerida por máquina", "Gráfico"])
 with aba1:
     f1, f2 = st.columns(2)

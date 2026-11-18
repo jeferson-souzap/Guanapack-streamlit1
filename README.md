@@ -48,7 +48,7 @@ Início e na barra lateral.
 | **Simulação da programação** | Cenários de fila: regras (sequência de formulação, subida e descida de micra, prazo × formulação, setup, OFs fixas), ajuste à mão, travas, desfazer, Gantt e cenários salvos para comparar |
 | **Consulta de pedido** | Tudo sobre um pedido numa tela: CTLR (data OTD), pallets do estoque, reserva, encaixe, fila sugerida, planejamento, a simulação em edição e anotações livres no pedido (com usuário e PC; resolver/reabrir/excluir) |
 | **Reserva de estoque** | Qual pallet do estoque reservar para cada pedido da carteira (exato ou alternativo) e quem fica sem estoque |
-| **Encaixe em máquinas** | Onde produzir os pedidos sem estoque, fila sugerida (com os saltos de micra e a OF de estoque intermediária a gerar) e gráfico de Gantt por máquina |
+| **Encaixe em máquinas** | Onde produzir os pedidos sem estoque (e, se ligar a opção, os atendidos só por estoque alternativo), fila sugerida (com os saltos de micra e a OF de estoque intermediária a gerar) e gráfico de Gantt por máquina |
 | **Cadastros** | Rank de formulações, clientes prioritários e regras das máquinas (edição como planilha) |
 | **Configuração** | Pasta por usuário/PC, nomes dos arquivos, parâmetros das regras, módulos e backup |
 
@@ -93,6 +93,7 @@ Editáveis em Configuração > Parâmetros (padrões da planilha rev027):
 | Degraus que o alternativo pode subir no rank | 1 |
 | Primeiras OFs fixas de cada máquina no encaixe | 3 |
 | Salto de micra: maior diferença entre duas OFs seguidas | 5 µ |
+| Encaixar também os pedidos com estoque só alternativo (chave na página do Encaixe e na simulação) | não |
 | Dias de tolerância para relatório antigo | 0 |
 
 ## Como funciona o cálculo
