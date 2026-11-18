@@ -23,6 +23,8 @@ MODULOS = [
     Modulo("inicio", "Início", None, "modulos/inicio.py", "", "Situação dos relatórios e atalhos", fixo=True),
     Modulo("enviar", "Enviar relatórios", None, "modulos/enviar.py", "",
            "Enviar os relatórios do ERP pelo navegador (app na nuvem)", fixo=True),
+    Modulo("consulta", "Consulta de pedido", None, "modulos/consulta.py", "Programação",
+           "Tudo sobre um pedido numa tela: CTLR, estoque, reserva, encaixe, planejamento e simulação"),
     Modulo("simulacao", "Simulação da programação", None, "modulos/simulacao.py", "Programação",
            "Cenários de fila das máquinas: escolher as regras, mexer na fila à mão e comparar"),
     Modulo("reserva", "Reserva de estoque", None, "modulos/reserva.py", "Programação",

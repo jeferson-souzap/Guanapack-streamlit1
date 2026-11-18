@@ -114,3 +114,14 @@ def test_encaixe_sem_pedido_sem_estoque(sem_relatorios, monkeypatch):
     monkeypatch.setattr(pipeline.Contexto, "encaixe", lambda self: vazio)
     at = _abrir("modulos/encaixe.py")
     assert not _erros(at), _erros(at)
+
+
+def test_consulta_de_um_pedido_real(com_relatorios_reais):
+    """Consulta com um pedido que está no planejamento: todos os blocos abrem sem erro."""
+    plan = pipeline.montar_contexto().planejamento()[0]
+    numero = int(pd.to_numeric(plan["pedido"], errors="coerce").dropna().iloc[0])
+    at = _abrir("modulos/consulta.py")
+    at.number_input[0].set_value(numero).run()
+    assert not _erros(at), _erros(at)
+    linhas = {str(m.value).split(" · ")[0]: str(m.value) for m in at.markdown if " · " in str(m.value)}
+    assert "**Planejamento das máquinas**" in linhas and "0 linha" not in linhas["**Planejamento das máquinas**"]

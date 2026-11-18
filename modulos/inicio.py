@@ -36,4 +36,5 @@ with r.container(border=True):
 with b.container(border=True):
     st.page_link("modulos/encaixe.py", label="**Encaixe em máquinas**", icon=":material/view_timeline:")
     st.caption("Onde produzir os pedidos sem estoque, a fila sugerida de cada máquina e o gráfico de Gantt.")
+st.page_link("modulos/consulta.py", label="Consultar um pedido (tudo sobre ele numa tela)", icon=":material/search:")
 st.caption("Regras das máquinas e rank das formulações em **Cadastros**; pasta e parâmetros em **Configuração**.")
