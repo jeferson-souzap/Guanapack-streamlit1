@@ -5,7 +5,8 @@ Fica no banco só o que é do usuário e precisa durar entre uma consulta e outr
 - cadastros: rank de formulações, clientes prioritários (especiais) e regras das máquinas;
 - locais da pasta de relatórios por usuário e PC, e o nome do arquivo de cada relatório;
 - parâmetros das regras, módulos ativos e preferências de cada usuário;
-- cenários salvos da simulação da programação e auditoria de toda alteração nos cadastros.
+- cenários salvos da simulação da programação, anotações nos pedidos e auditoria de toda alteração
+  nos cadastros.
 
 Os relatórios do ERP não são gravados aqui: o app lê os .xls direto da pasta.
 
@@ -21,7 +22,7 @@ import pandas as pd
 
 import config
 
-VERSAO_ESQUEMA = 3
+VERSAO_ESQUEMA = 4
 
 ESQUEMA = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -88,6 +89,16 @@ CREATE TABLE IF NOT EXISTS preferencias (
     valor TEXT,
     PRIMARY KEY (usuario, chave)
 );
+CREATE TABLE IF NOT EXISTS anotacoes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    num_pedido INTEGER NOT NULL,
+    prog INTEGER,
+    texto TEXT NOT NULL,
+    resolvida INTEGER NOT NULL DEFAULT 0,
+    usuario TEXT, pc TEXT,
+    criado_em TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_anotacoes_pedido ON anotacoes (num_pedido, prog);
 CREATE TABLE IF NOT EXISTS cenarios_simulacao (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     nome TEXT NOT NULL,
@@ -190,8 +201,9 @@ def inicializar():
             c.execute("INSERT OR IGNORE INTO arquivos_relatorios (chave, arquivo) VALUES (?, ?)", (chave, rel.arquivo))
 
 
-# Tabelas dos módulos que saíram do app (Histórico, Consulta de pedido): apagadas dos bancos antigos.
-TABELAS_REMOVIDAS = ("historico_indicadores", "execucoes", "anotacoes")      # esquema 3
+# Tabelas dos módulos que saíram do app (Histórico, log de execuções): apagadas dos bancos antigos (esquema 3).
+# anotacoes saiu no esquema 3 e voltou no 4, junto com a Consulta de pedido.
+TABELAS_REMOVIDAS = ("historico_indicadores", "execucoes")
 
 
 def _tem_tabela_removida() -> bool:

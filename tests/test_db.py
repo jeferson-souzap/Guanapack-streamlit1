@@ -16,7 +16,6 @@ def test_banco_antigo_perde_as_tabelas_dos_modulos_removidos(tmp_path, monkeypat
     with sqlite3.connect(config.DATABASE) as c:           # como era até o esquema 2
         c.execute("CREATE TABLE historico_indicadores (id INTEGER PRIMARY KEY, data_hora TEXT, atrasados INTEGER)")
         c.execute("INSERT INTO historico_indicadores (data_hora, atrasados) VALUES ('2026-11-01 08:00:00', 5)")
-        c.execute("CREATE TABLE anotacoes (id INTEGER PRIMARY KEY, texto TEXT)")
         c.execute("CREATE TABLE execucoes (id INTEGER PRIMARY KEY, acao TEXT)")
     db.inicializar()
     assert not _tabelas() & set(db.TABELAS_REMOVIDAS)
@@ -36,3 +35,18 @@ def test_banco_novo_nao_cria_as_tabelas_removidas(tmp_path, monkeypatch):
     db.inicializar()
     assert not _tabelas() & set(db.TABELAS_REMOVIDAS)
     assert not config.BACKUP_DIR.exists() or not any(config.BACKUP_DIR.iterdir())
+
+
+def test_anotacoes_incluir_resolver_e_excluir(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DADOS_DIR", tmp_path)
+    monkeypatch.setattr(config, "DATABASE", tmp_path / "anot.sqlite3")
+    monkeypatch.setattr(config, "BACKUP_DIR", tmp_path / "backup")
+    db.inicializar()
+    from core import anotacoes
+    anotacoes.incluir(123, None, "cliente aceitou adiar")
+    notas = anotacoes.listar(123)
+    assert list(notas["texto"]) == ["cliente aceitou adiar"] and not notas["resolvida"].iloc[0]
+    anotacoes.marcar(int(notas["id"].iloc[0]), True)
+    assert anotacoes.listar(so_abertas=True).empty
+    anotacoes.excluir(int(notas["id"].iloc[0]))
+    assert anotacoes.listar(123).empty

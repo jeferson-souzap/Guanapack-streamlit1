@@ -1,9 +1,9 @@
 """Consulta de pedido: tudo o que o app sabe de um pedido (CTLR, estoque, reserva, encaixe, planejamento
-e a simulação em edição) numa tela só."""
+e a simulação em edição) numa tela só, mais as anotações do pedido."""
 import pandas as pd
 import streamlit as st
 
-from core import ui
+from core import anotacoes, ui
 from core.pipeline import FaltaRelatorio
 
 c = ui.ctx()
@@ -14,7 +14,14 @@ numero = col1.number_input("Pedido", min_value=0, step=1, value=st.session_state
 st.session_state["consulta_pedido"] = numero
 if not numero:
     st.caption("Mostra o pedido no CTLR (data OTD e situação), os pallets do estoque ligados a ele, a reserva, "
-               "a sugestão do encaixe, a fila sugerida, o planejamento das máquinas e a simulação em edição.")
+               "a sugestão do encaixe, a fila sugerida, o planejamento das máquinas, a simulação em edição e "
+               "as anotações do pedido.")
+    abertas = anotacoes.listar(so_abertas=True)
+    st.subheader("Anotações em aberto")
+    if len(abertas):
+        ui.tabela(abertas, "anotacoes", "anot_abertas", busca=False)
+    else:
+        st.caption("Nenhuma.")
     st.stop()
 
 
@@ -57,3 +64,29 @@ if cen is not None and not cen.itens.empty:
             "inicio", "fim", "data_otd", "atraso", "salto_micra", "alerta"])
 else:
     st.caption("Simulação da programação: nenhum cenário aberto nesta sessão.")
+
+st.divider()
+st.subheader("Anotações")
+with st.form("nova_anotacao", clear_on_submit=True):
+    a1, a2 = st.columns([1, 5])
+    prog = a1.number_input("Programação (opcional)", min_value=0, step=1, value=0)
+    texto = a2.text_input("Anotação", placeholder="ex.: cliente aceitou adiar para sexta")
+    if st.form_submit_button("Salvar anotação"):
+        try:
+            anotacoes.incluir(numero, prog or None, texto)
+            st.toast("Anotação salva.")
+        except ValueError as e:
+            st.error(str(e))
+
+for n in anotacoes.listar(numero).itertuples():
+    with st.container(border=True):
+        t1, t2, t3 = st.columns([6, 1, 1])
+        prog_txt = f" / prog {int(n.prog)}" if pd.notna(n.prog) else ""
+        t1.markdown(f"{'~~' if n.resolvida else ''}{n.texto}{'~~' if n.resolvida else ''}  \n"
+                    f"<small>{n.usuario}@{n.pc} · {n.criado_em}{prog_txt}</small>", unsafe_allow_html=True)
+        if t2.button("Reabrir" if n.resolvida else "Resolver", key=f"r{n.id}"):
+            anotacoes.marcar(n.id, not n.resolvida)
+            st.rerun()
+        if t3.button("Excluir", key=f"x{n.id}"):
+            anotacoes.excluir(n.id)
+            st.rerun()
