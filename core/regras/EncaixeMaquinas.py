@@ -60,9 +60,10 @@ Regras (combinadas com o usuário em 09 e 10/11/2026):
    sugerida avisa na observação. Desligado (padrão), só entram os pedidos sem estoque.
 11. Modo do encaixe (25/11/2026, pedido do usuário: "o importante é não atrasar nada"). Duas opções:
    1.1 NÃO ATRASAR A FILA (padrão): respeita as datas de quem já está na máquina. O pedido só entra
-       numa posição em que nenhuma OF empurrada passa da data OTD dela, e também não empurra OF que já
-       está atrasada (atrasaria mais). No fim da fila sempre pode. Entre as posições permitidas, a
-       que atende o prazo do pedido; se nenhuma atende, a que termina mais cedo.
+       numa posição em que nenhuma OF empurrada que está no prazo passa da data OTD dela. Pode passar na
+       frente de OF que já está atrasada (25/11/2026, decisão do usuário); entre posições iguais no
+       prazo, prefere a que empurra menos OFs já atrasadas. No fim da fila sempre pode. Entre as
+       posições permitidas, a que atende o prazo do pedido; se nenhuma atende, a que termina mais cedo.
    1.2 ATENDER O PEDIDO: o pedido novo cumpre a data dele empurrando para frente o que já está na
        máquina; entre as posições que atendem, a que faz menos OFs passarem a atrasar (as de clientes
        prioritários primeiro) e depois a que empurra menos OFs já atrasadas.
@@ -70,6 +71,10 @@ Regras (combinadas com o usuário em 09 e 10/11/2026):
    QUEBRAR fica só na simulação) e, entre posições iguais no prazo, fica onde a formulação melhor
    encaixa (ao lado de OF da mesma formulação) antes de olhar a micra. gerar_encaixe roda os dois
    modos: as filas seguem o escolhido e as colunas comparar_* mostram o outro.
+   Vizinho novo (25/11/2026, visto nos dados reais): o pedido também não pode entrar ao lado de um
+   pedido novo já encaixado de forma que ESSE fique no meio de uma sequência (ex.: MN entrou no fim,
+   depois de QUANTUM; um QUANTUM novo não vai para depois do MN, senão fica QUANTUM, MN, QUANTUM).
+   Se não sobrar nenhuma posição, usa a melhor dessas e marca como quebra.
 """
 import math
 import re
@@ -572,6 +577,21 @@ class Encaixe:
             return False
         return not (min(antes, depois) <= nivel_pedido <= max(antes, depois))
 
+    def quebra_vizinho(self, fila: list, niveis: list, pos: int, nivel_pedido) -> bool:
+        """Entrando antes da OF da posição pos, o pedido deixa um pedido novo vizinho no meio de uma
+        sequência de formulação? (os do planejamento ficam como o planejador pôs)"""
+        if nivel_pedido is None:
+            return False
+        j = pos - 2                                    # vizinho de antes: fica entre niveis[j-1] e o pedido
+        if j >= 1 and fila[j].novo and None not in (niveis[j - 1], niveis[j]) and \
+                not (min(niveis[j - 1], nivel_pedido) <= niveis[j] <= max(niveis[j - 1], nivel_pedido)):
+            return True
+        j = pos - 1                                    # vizinho de depois: fica entre o pedido e niveis[j+1]
+        if j < len(fila) - 1 and fila[j].novo and None not in (niveis[j], niveis[j + 1]) and \
+                not (min(nivel_pedido, niveis[j + 1]) <= niveis[j] <= max(nivel_pedido, niveis[j + 1])):
+            return True
+        return False
+
     def melhor_que(self, a: Opcao, b: Opcao | None) -> bool:
         """a é melhor que b? (regras 4, 5 e 11 do cabeçalho)"""
         if b is None:
@@ -636,12 +656,14 @@ class Encaixe:
             return not a.quebra
         if (not a.atende or a.prioritario) and a.fim != b.fim:   # não atende (ou prioritário): o mais cedo
             return a.fim < b.fim
+        if a.agrava != b.agrava:                           # pode passar na frente das já atrasadas, mas evita
+            return a.agrava < b.agrava
         return self._desempate(a, b)
 
     def encaixar_pedido(self, p: Pedido):
         limite = self.prazo_do_pedido(p)
         nivel = nivel_formulacao(p.formulacao, self.rank)
-        melhor = None
+        melhor = reserva = None                            # reserva: só posições que quebram ao lado de pedido novo
         for m, regra in enumerate(self.regras):
             motivo = self.bloqueios(m, p)
             kgh, origem = 0.0, ""
@@ -661,18 +683,24 @@ class Encaixe:
                 quebra = self.quebra_sequencia(niveis, pos, nivel)
                 if quebra and not self.pode_quebrar:
                     continue                               # regra 6: não entra no meio da sequência
+                viz = self.quebra_vizinho(fila, niveis, pos, nivel)
                 op = self.avaliar_posicao(m, pos, dur, limite, p)
-                if self.modo == NAO_ATRASAR_FILA and (op.n_atrasos or op.agrava):
+                if self.modo == NAO_ATRASAR_FILA and op.n_atrasos:
                     continue                               # regra 11 (1.1): não atrasa quem já está na máquina
-                op.kgh, op.taxa_origem, op.quebra = kgh, origem, quebra
+                op.kgh, op.taxa_origem, op.quebra = kgh, origem, quebra or viz
                 op.mesma_formulacao = nivel is not None and (
                     (pos > 1 and niveis[pos - 2] == nivel) or (pos <= len(niveis) and niveis[pos - 1] == nivel))
                 antes = micras[pos - 2] if pos > 1 else None
                 depois = micras[pos - 1] if pos <= len(micras) else None
                 op.saltos_micra = (e_salto(antes, p.micra, self.salto_micra) + e_salto(p.micra, depois, self.salto_micra)
                                    - e_salto(antes, depois, self.salto_micra))
-                if self.melhor_que(op, melhor):
+                if viz and not self.pode_quebrar:
+                    if self.melhor_que(op, reserva):
+                        reserva = op
+                elif self.melhor_que(op, melhor):
                     melhor = op
+        if melhor is None:
+            melhor = reserva
         if melhor is None:
             p.tipo = SEM_MAQUINA
             return

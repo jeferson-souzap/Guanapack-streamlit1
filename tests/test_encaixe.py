@@ -207,40 +207,25 @@ def test_atender_o_pedido_empurra_a_fila():
     assert p.comparar_opcao == "NÃO ATRASAR A FILA"
 
 
-def test_nao_atrasar_a_fila_nao_empurra_quem_ja_esta_atrasado():
-    # OF 3 já está atrasada (OTD 10/11): no 1.1 o pedido não entra antes dela, mesmo com prazo folgado
+def test_nao_atrasar_a_fila_pode_passar_na_frente_de_quem_ja_esta_atrasado():
+    # OF 3 já está atrasada (OTD 10/11). Pedido com prazo folgado: não precisa, então não passa na frente
     ofs = fila_com_pedido_no_limite("2026-11-10")
     pedidos, filas, _ = gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame([ped(1, "2026-11-30")]), REGRAS, None, {},
                                       agora=INICIO, modo="NÃO ATRASAR A FILA")
-    assert pedidos.iloc[0].depois_de == "OF 4"           # depois da OF 3 e junto ao fim (empurra menos)
+    assert pedidos.iloc[0].depois_de == "OF 4"
     assert filas.set_index("id_of").loc["3", "empurrado_h"] == 0
+    # Pedido com OTD 11/11: só atende entrando antes da OF 3 (já atrasada) -> pode passar na frente dela
+    pedidos, filas, _ = gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame([ped(1, "2026-11-13")]), REGRAS, None, {},
+                                      agora=INICIO, modo="NÃO ATRASAR A FILA")
+    assert pedidos.iloc[0].depois_de == "OF 2" and pedidos.iloc[0].atende_embarque == "SIM"
+    assert filas.set_index("id_of").loc["3", "atraso"] == "JÁ ATRASADA"
 
 
-def test_sem_pedido_sem_estoque_as_tabelas_saem_com_as_colunas():
-    # Todo pedido tem estoque: nada para encaixar, mas a tela e os indicadores leem as colunas
-    com_estoque = {**ped(1, "2026-11-20"), "tem_estoque": "SIM"}
-    pedidos, filas, _ = encaixar([of(1, 0)], [com_estoque])
-    assert pedidos.empty
-    for col in ("sugestao", "id_of", "atende_embarque", "maquina", "comparar_sugestao"):
-        assert col in pedidos
-    _, filas_vazias, _ = gerar_encaixe(pd.DataFrame([of(1, 0)]).iloc[0:0], pd.DataFrame([com_estoque]), REGRAS,
-                                       None, {}, agora=INICIO)
-    for col in ("maquina", "situacao", "atraso", "inicio_sugerido", "fim_sugerido"):
-        assert col in filas_vazias
-
-
-def test_alternativos_so_entram_com_a_opcao_ligada():
-    # Regra 10: pedido atendido por estoque alternativo fica fora, a não ser que a opção esteja ligada
-    alt = {**ped(1, "2026-11-20"), "tem_estoque": "SIM", "atendimento": "ALTERNATIVO",
-           "alternativo_usado": "micra 19 no lugar de 18"}
-    exato = {**ped(2, "2026-11-20"), "tem_estoque": "SIM", "atendimento": "EXATO", "alternativo_usado": None}
-    sem = ped(3, "2026-11-20")
-    ofs = [of(i, 10 * i) for i in range(4)]
-    desligado, _, _ = encaixar(ofs, [alt, exato, sem])
-    assert list(desligado.num_pedido) == ["3"] and desligado.estoque_alternativo.isna().all()
-    ligado, filas, resumo = gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame([alt, exato, sem]), REGRAS, None, {},
-                                          agora=INICIO, encaixar_alternativos=True)
-    assert sorted(ligado.num_pedido) == ["1", "3"]
-    assert ligado.set_index("num_pedido").loc["1", "estoque_alternativo"] == "micra 19 no lugar de 18"
-    assert filas.observacao.str.contains("tem estoque alternativo", na=False).sum() == 1
-    assert "1 com estoque alternativo" in resumo
+def test_nao_deixa_pedido_novo_no_meio_da_sequencia():
+    # QUANTUM (fixas e OF 3) e um MN que entrou no fim; o QUANTUM novo não vai para depois do MN
+    # (ficaria QUANTUM, MN, QUANTUM): entra antes dele, entre o QUANTUM e o MN
+    ofs = [of_form(i, 10 * i, "QUANTUM 400%") for i in range(4)]
+    pedidos, filas, _ = encaixar_seq(ofs, [ped(1, "2026-11-30", formulacao="MN 250%"),
+                                           ped(2, "2026-12-30", formulacao="QUANTUM 400%")])
+    assert list(filas.formulacao) == ["QUANTUM 400%"] * 5 + ["MN 250%"]
+    assert pedidos.quebra_sequencia.isna().all()

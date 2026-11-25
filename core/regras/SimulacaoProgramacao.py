@@ -484,8 +484,8 @@ def de_json(d: dict) -> Cenario:
 #   ATENÇÃO = há pedido novo que não atende, OF já atrasada que dá para recuperar, pedido no meio de
 #             sequência de formulação ou salto de micra;
 #   BOA     = nada disso (pode haver OF já atrasada que nenhuma mudança recupera; ela fica listada);
-#   nota    = 100 - 25 por prioritário fora - 10 por OF que passa a atrasar - 5 por pedido novo que não
-#             atende - 3 por OF já atrasada - 3 por pedido no meio de sequência - 1 por salto de micra;
+#   nota    = % das OFs com data OTD que terminam no prazo - 10 por prioritário fora - 5 por OF que
+#             passa a atrasar - 2 por pedido no meio de sequência (de 0 a 100);
 # - o plano de melhoria: mudanças de posição/máquina, uma depois da outra, que tiram OFs do atraso (ou
 #   diminuem as horas de atraso) SEM fazer nenhuma OF que está no prazo passar a atrasar, sem aumentar os
 #   prioritários fora do prazo e respeitando a sequência de formulação (se o cenário confere) e as
@@ -742,9 +742,11 @@ def avaliar_programacao(cen: Cenario, max_passos: int = MAX_PASSOS) -> Avaliacao
     if it.empty:
         return Avaliacao(BOA, 100, ["Nenhuma OF nas máquinas do cenário."], [], vazio, vazio, ind, ind)
     nao_atende = int((it["atraso"] == NAO_ATENDE).sum())
-    nota = (100 - 25 * ind["prioritarios_fora"] - 10 * ind["passam_a_atrasar"] - 5 * nao_atende
-            - 3 * ind["ja_atrasadas"] - 3 * ind["quebras"] - ind["saltos_micra"])
-    nota = int(max(0, min(100, nota)))
+    com_prazo = it["atraso"].notna().sum()
+    no_prazo = (it["atraso"] == OK).sum()
+    base = 100.0 * no_prazo / com_prazo if com_prazo else 100.0
+    nota = base - 10 * ind["prioritarios_fora"] - 5 * ind["passam_a_atrasar"] - 2 * ind["quebras"]
+    nota = int(round(max(0.0, min(100.0, nota))))
 
     # plano de melhoria
     mod = _Modelo(cen)
@@ -799,8 +801,6 @@ def avaliar_programacao(cen: Cenario, max_passos: int = MAX_PASSOS) -> Avaliacao
         situacao = ATENCAO
     else:
         situacao = BOA
-    if situacao != RUIM and nota < 50:
-        situacao = RUIM
 
     sugestoes = []
     if not plano.empty:

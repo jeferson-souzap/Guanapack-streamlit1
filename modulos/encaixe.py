@@ -7,8 +7,8 @@ from core import contexto, ui
 c = ui.ctx()
 ui.cabecalho("Encaixe em máquinas",
              f"As {c.params['ordens_fixas']} primeiras OFs de cada máquina ficam fixas. "
-             "NÃO ATRASAR A FILA: o pedido só entra onde nenhuma OF da máquina passa da data OTD (nem as já atrasadas "
-             "atrasam mais); ATENDER O PEDIDO: o pedido cumpre a data dele empurrando a fila, atrasando o mínimo. "
+             "NÃO ATRASAR A FILA: o pedido só entra onde nenhuma OF da máquina que está no prazo passa da data OTD "
+             "(pode passar na frente das já atrasadas); ATENDER O PEDIDO: o pedido cumpre a data dele empurrando a fila, atrasando o mínimo. "
              "A sequência de formulação é sempre respeitada (grupo de formulação da OF e rank do cadastro: o pedido "
              "só entra entre OFs cujo rank comporta o dele; no fim da fila sempre pode) e, entre posições iguais, fica "
              "ao lado da mesma formulação. "

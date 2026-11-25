@@ -126,9 +126,9 @@ with aba_aval:
     cor = {S.BOA: "green", S.ATENCAO: "orange", S.RUIM: "red"}[av.situacao]
     v1, v2, v3, v4 = st.columns(4)
     v1.markdown(f"### :{cor}[Programação {av.situacao}]")
-    v2.metric("Nota", f"{av.nota} / 100", help="100 − 25 por prioritário fora do prazo − 10 por OF que passa a "
-                                                "atrasar − 5 por pedido novo que não atende − 3 por OF já atrasada − "
-                                                "3 por pedido no meio de sequência − 1 por salto de micra")
+    v2.metric("Nota", f"{av.nota} / 100", help="% das OFs com data OTD que terminam no prazo − 10 por prioritário "
+                                                "fora do prazo − 5 por OF que passa a atrasar − 2 por pedido no meio "
+                                                "de sequência")
     v3.metric("Horas de atraso", f"{av.depois['horas_atraso_antes']:.0f} h",
               delta=f"{av.depois['horas_atraso_depois'] - av.depois['horas_atraso_antes']:.0f} h com o plano",
               delta_color="inverse", help="soma das horas de atraso das OFs fora do prazo")
