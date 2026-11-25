@@ -18,7 +18,11 @@ Regras do cenário (RegrasCenario):
 - fator_kgh: ajuste do kg/h dos pedidos novos (1.0 = mediana do relatório);
 - salto_micra: maior diferença de micra entre duas OFs seguidas (regra 9 do encaixe). Acima disso a
   linha é marcada como salto, com as micras das OFs de estoque a gerar entre as duas;
-- encaixar_alternativos: encaixa também os pedidos atendidos só por estoque alternativo (regra 10).
+- encaixar_alternativos: encaixa também os pedidos atendidos só por estoque alternativo (regra 10);
+- modo: NÃO ATRASAR A FILA / ATENDER O PEDIDO (regra 11 do encaixe).
+
+Avaliação (25/11/2026): avaliar_programacao diz se a programação está BOA / ATENÇÃO / RUIM e monta um
+plano de mudanças que tira OFs do atraso sem atrasar quem está no prazo (ver o fim do arquivo).
 
 Subida e descida de micra (17/11/2026): vale na fila inteira, também na troca de grupo de formulação.
 Agrupar por formulação ordena também a micra dentro de cada grupo, continuando da micra da OF
@@ -34,7 +38,7 @@ from dataclasses import asdict, dataclass, field
 import pandas as pd
 
 from core.regras import EncaixeMaquinas
-from core.regras.EncaixeMaquinas import (NAO_QUEBRAR, PODE_QUEBRAR, SITUACAO_NAO_PROG, Encaixe, Pedido, e_salto,
+from core.regras.EncaixeMaquinas import (ATENDER_PEDIDO, NAO_QUEBRAR, PODE_QUEBRAR, SITUACAO_NAO_PROG, Encaixe, Pedido, e_salto,
                                          micra_do_produto, nivel_formulacao, texto_salto)
 from core.regras.LimpezaDataframe import extrair_familia, parse_dimensoes
 from core.regras.Prioridade import ListaPrioritarios
@@ -69,9 +73,10 @@ class RegrasCenario:
     fator_kgh: float = 1.0
     salto_micra: float = field(default_factory=lambda: EncaixeMaquinas.SALTO_MICRA)
     encaixar_alternativos: bool = field(default_factory=lambda: EncaixeMaquinas.ENCAIXAR_ALTERNATIVOS)
+    modo: str = field(default_factory=lambda: EncaixeMaquinas.MODO_ENCAIXE)
 
     def texto(self) -> str:
-        partes = [f"sequência {self.sequencia}", "pelo prazo" if self.prioridade == PRAZO else "agrupado por formulação",
+        partes = [self.modo.lower(), f"sequência {self.sequencia}", "pelo prazo" if self.prioridade == PRAZO else "agrupado por formulação",
                   f"{self.ordens_fixas} fixas", "prioritários primeiro" if self.prioritarios else "sem prioritários"]
         if self.setup_min:
             partes.append(f"setup {self.setup_min:g} min/troca")
@@ -126,7 +131,7 @@ def gerar_cenario(plan, reserva, regras_maq, prioritarios=None, mapa_otd=None, r
                   mapa_otd, agora, rank=None if regras.sequencia == IGNORAR else rank,
                   pode_quebrar=(regras.sequencia == PODE_QUEBRAR), ordens_fixas=regras.ordens_fixas,
                   fator_kgh=regras.fator_kgh, salto_micra=regras.salto_micra,
-                  encaixar_alternativos=regras.encaixar_alternativos).executar()
+                  encaixar_alternativos=regras.encaixar_alternativos, modo=regras.modo).executar()
 
     apelidos = [r["apelido"] for r in regras_maq]
     linhas, inicio = [], {}
@@ -467,3 +472,366 @@ def de_json(d: dict) -> Cenario:
                   inicio={m: pd.Timestamp(v) for m, v in d["inicio"].items()},
                   taxas={m: {float(k): v for k, v in t.items()} for m, t in d["taxas"].items()}, rank=d.get("rank", {}))
     return recalcular(cen)
+
+
+# ===================================================================== avaliação da programação
+# (25/11/2026, pedido do usuário: "uma simulação que seja capaz de dizer se a programação está boa ou
+# não e o que pode melhorar para não atrasar o que já está atrasado")
+#
+# avaliar_programacao(cen) olha o cenário como está e devolve:
+# - situacao BOA / ATENÇÃO / RUIM e uma nota de 0 a 100:
+#   RUIM    = algum cliente prioritário fora do prazo ou alguma OF que estava no prazo passa a atrasar;
+#   ATENÇÃO = há pedido novo que não atende, OF já atrasada que dá para recuperar, pedido no meio de
+#             sequência de formulação ou salto de micra;
+#   BOA     = nada disso (pode haver OF já atrasada que nenhuma mudança recupera; ela fica listada);
+#   nota    = 100 - 25 por prioritário fora - 10 por OF que passa a atrasar - 5 por pedido novo que não
+#             atende - 3 por OF já atrasada - 3 por pedido no meio de sequência - 1 por salto de micra;
+# - o plano de melhoria: mudanças de posição/máquina, uma depois da outra, que tiram OFs do atraso (ou
+#   diminuem as horas de atraso) SEM fazer nenhuma OF que está no prazo passar a atrasar, sem aumentar os
+#   prioritários fora do prazo e respeitando a sequência de formulação (se o cenário confere) e as
+#   máquinas que rodam o produto (cadastro). OFs fixas e travadas não saem do lugar e nada entra antes
+#   delas. A cada passo escolhe a mudança que tira uma OF do atraso (prioritário primeiro) e mais diminui
+#   as horas de atraso das máquinas envolvidas;
+# - as OFs que continuam atrasadas, com o motivo (nem como a 1ª depois das fixas, em nenhuma máquina
+#   que roda, ela termina no prazo -> só negociando a data / hora extra; ou toda posição que recupera
+#   faz outra OF atrasar).
+# aplicar_plano(cen, plano) aplica os passos no cenário (dá para desfazer na tela).
+
+BOA, ATENCAO, RUIM = "BOA", "ATENÇÃO", "RUIM"
+MAX_PASSOS = 40
+GANHO_MIN_H = 0.5          # mudança que diminui menos que isso o atraso total não entra no plano
+
+
+@dataclass
+class Avaliacao:
+    situacao: str
+    nota: int
+    motivos: list
+    sugestoes: list
+    plano: pd.DataFrame
+    continuam: pd.DataFrame
+    antes: dict
+    depois: dict
+
+
+@dataclass
+class _Of:
+    chave: str
+    dur: float             # horas
+    intervalo: float
+    prazo: float | None    # horas desde a referência (1º instante atrasado)
+    nivel: int | None
+    presa: bool
+    prioritario: bool
+    qtde: float
+    micra: float | None
+    roda_em: str
+    situacao: str
+    fim_atual: float | None
+
+
+def _h(ts, ref) -> float | None:
+    if ts is None or pd.isna(ts):
+        return None
+    return (pd.Timestamp(ts) - ref).total_seconds() / 3600
+
+
+class _Modelo:
+    """As filas do cenário em horas, para testar muitas mudanças rápido (mesma conta de recalcular)."""
+
+    def __init__(self, cen: Cenario):
+        it = cen.itens.sort_values(["maquina", "ordem"], kind="stable")
+        self.ref = pd.Timestamp(min(pd.Timestamp(v) for v in cen.inicio.values())) if cen.inicio else it["inicio"].min()
+        self.setup = float(cen.regras.setup_min or 0) / 60
+        self.confere_seq = cen.regras.sequencia != IGNORAR
+        self.taxas = cen.taxas
+        self.inicio, self.filas = {}, {}
+        for maq, fila in it.groupby("maquina", sort=False):
+            self.inicio[maq] = _h(cen.inicio.get(maq, fila["inicio_atual"].dropna().min()), self.ref) or 0.0
+            self.filas[maq] = [
+                _Of(chave=r.chave, dur=float(r.dur_h or 0), intervalo=float(r.intervalo_h or 0), prazo=_h(r.prazo, self.ref),
+                    nivel=None if r.nivel_formulacao is None or pd.isna(r.nivel_formulacao) else int(r.nivel_formulacao),
+                    presa=r.situacao == "FIXA" or bool(getattr(r, "travada", False)), prioritario=bool(r.prioritario),
+                    qtde=float(r.qtde_kg or 0), micra=_micra_linha(r), roda_em=str(r.roda_em or ""),
+                    situacao=str(r.situacao or ""), fim_atual=_h(r.fim_atual, self.ref))
+                for r in fila.itertuples()]
+
+    def fins(self, maq: str, fila: list) -> list:
+        niveis = _herdar([o.nivel for o in fila])
+        t, saida = self.inicio.get(maq, 0.0), []
+        for j, o in enumerate(fila):
+            if j > 0:
+                t += o.intervalo
+                if self.setup and None not in (niveis[j], niveis[j - 1]) and niveis[j] != niveis[j - 1]:
+                    t += self.setup
+            t += o.dur
+            saida.append(t)
+        return saida
+
+    @staticmethod
+    def atraso(o: _Of, fim: float) -> float | None:
+        """Horas de atraso (None = no prazo ou sem prazo). Terminar no 1º instante atrasado já é atraso."""
+        if o.prazo is None or fim < o.prazo - 1e-9:
+            return None
+        return fim - o.prazo
+
+    def estado(self, maq: str, fila: list) -> dict:
+        """chave -> horas de atraso das OFs atrasadas da fila."""
+        return {o.chave: a for o, f in zip(fila, self.fins(maq, fila)) if (a := self.atraso(o, f)) is not None}
+
+    def todas_atrasadas(self) -> dict:
+        saida = {}
+        for maq, fila in self.filas.items():
+            for k, a in self.estado(maq, fila).items():
+                saida[k] = (maq, a)
+        return saida
+
+    def primeira_livre(self, fila: list) -> int:
+        return max((j + 1 for j, o in enumerate(fila) if o.presa), default=0)
+
+    def quebra(self, niveis: list, pos: int, nivel) -> bool:
+        """Entrando no índice pos (0 = começo) da fila com estes níveis herdados, quebra a sequência?"""
+        if not self.confere_seq or nivel is None or pos <= 0 or pos >= len(niveis):
+            return False
+        antes, depois = niveis[pos - 1], niveis[pos]
+        return None not in (antes, depois) and not (min(antes, depois) <= nivel <= max(antes, depois))
+
+    def copia_para(self, o: _Of, maq: str, origem: str) -> _Of | None:
+        """A OF levada para outra máquina: duração pelo kg/h dessa máquina (None = não roda / sem kg/h)."""
+        if maq == origem:
+            return o
+        if maq not in o.roda_em.split(", "):
+            return None
+        kgh = _taxa(self.taxas.get(maq, {}), o.micra)
+        if kgh <= 0:
+            return None
+        return _Of(**{**o.__dict__, "dur": o.qtde / kgh, "intervalo": 0.0})
+
+
+def _insercao(mod: _Modelo, maq: str, base: list, pos: int, novo: _Of, antes: dict, prefixo: list,
+              fins: list, niveis: list):
+    """Insere novo no índice pos de base e devolve {chave: horas de atraso} da fila, ou None se alguma OF que
+    não estava atrasada (fora de antes) passa a atrasar. prefixo[pos] = atrasos das OFs antes de pos."""
+    depois = dict(prefixo[pos])
+    t = mod.inicio.get(maq, 0.0) if pos == 0 else fins[pos - 1]
+    nivel_ant = niveis[pos - 1] if pos > 0 else None
+    seguintes = [novo] + base[pos:]
+    for j, o in enumerate(seguintes):
+        nivel = (novo.nivel if novo.nivel is not None else nivel_ant) if j == 0 else niveis[pos + j - 1]
+        if pos > 0 or j > 0:
+            t += o.intervalo
+            if mod.setup and None not in (nivel, nivel_ant) and nivel != nivel_ant:
+                t += mod.setup
+        t += o.dur
+        nivel_ant = nivel
+        a = mod.atraso(o, t)
+        if a is not None:
+            if o.chave not in antes:
+                return None
+            depois[o.chave] = a
+    return depois
+
+
+def _base(mod: _Modelo, maq: str, base: list):
+    """Fins, níveis herdados e os atrasos acumulados de cada prefixo da fila."""
+    fins = mod.fins(maq, base)
+    niveis = _herdar([o.nivel for o in base])
+    prefixo, atual = [{}], {}
+    for o, f in zip(base, fins):
+        a = mod.atraso(o, f)
+        if a is not None:
+            atual = {**atual, o.chave: a}
+        prefixo.append(atual)
+    return fins, niveis, prefixo
+
+
+def _melhor_mudanca(mod: _Modelo, alvos: list, atrasadas: dict, prioritarias: set):
+    """A melhor mudança para uma das OFs atrasadas (ou None)."""
+    melhor, chave_melhor = None, None
+    estados = {maq: mod.estado(maq, fila) for maq, fila in mod.filas.items()}
+    bases = {maq: _base(mod, maq, fila) for maq, fila in mod.filas.items()}
+    for k in alvos:
+        maq_o, atraso_o = atrasadas[k]
+        fila_o = mod.filas[maq_o]
+        j = next(i for i, o in enumerate(fila_o) if o.chave == k)
+        o = fila_o[j]
+        if o.presa:
+            continue
+        sem = fila_o[:j] + fila_o[j + 1:]
+        est_sem = mod.estado(maq_o, sem)
+        base_sem = _base(mod, maq_o, sem)
+        for maq, fila in mod.filas.items():
+            novo = mod.copia_para(o, maq, maq_o)
+            if novo is None:
+                continue
+            mesma = maq == maq_o
+            base = sem if mesma else fila
+            fins, niveis, prefixo = base_sem if mesma else bases[maq]
+            antes = dict(estados[maq_o])
+            if not mesma:
+                antes.update(estados[maq])
+                if any(c not in antes for c in est_sem):
+                    continue
+            ini = mod.primeira_livre(base)
+            fim_pos = j if mesma else len(base) + 1           # na mesma máquina só adianta
+            for pos in range(ini, min(fim_pos, len(base) + 1)):
+                t0 = mod.inicio.get(maq, 0.0) if pos == 0 else fins[pos - 1]
+                if mod.atraso(novo, t0 + novo.dur) is not None and \
+                        mod.atraso(novo, t0 + novo.dur) >= atraso_o - GANHO_MIN_H:
+                    break                                      # daqui para frente ela não melhora
+                if mod.quebra(niveis, pos, novo.nivel):
+                    continue
+                depois = _insercao(mod, maq, base, pos, novo, antes, prefixo, fins, niveis)
+                if depois is None:
+                    continue                                   # alguma OF no prazo passaria a atrasar
+                if not mesma:
+                    depois.update(est_sem)
+                if sum(1 for c in depois if c in prioritarias) > sum(1 for c in antes if c in prioritarias):
+                    continue
+                ganho = sum(antes.values()) - sum(depois.values())
+                sai = k not in depois
+                if ganho < GANHO_MIN_H and not sai:
+                    continue
+                nota = (sai, o.prioritario, round(ganho, 3), -(not mesma), -abs(pos - j))
+                if chave_melhor is None or nota > chave_melhor:
+                    chave_melhor = nota
+                    melhor = {"chave": k, "de_maquina": maq_o, "de_ordem": j + 1, "para_maquina": maq,
+                              "para_ordem": pos + 1, "atraso_antes_h": round(atraso_o, 1),
+                              "atraso_depois_h": round(depois.get(k, 0.0), 1), "sai_do_atraso": sai,
+                              "ganho_total_h": round(ganho, 1), "prioritario": o.prioritario,
+                              "_teste": base[:pos] + [novo] + base[pos:], "_sem": sem}
+    return melhor
+
+
+def _prioritaria(mod: _Modelo, chave: str) -> bool:
+    for fila in mod.filas.values():
+        for o in fila:
+            if o.chave == chave:
+                return o.prioritario
+    return False
+
+
+def _por_que_continua(mod: _Modelo, chave: str, maq_o: str) -> str:
+    fila_o = mod.filas[maq_o]
+    j = next(i for i, o in enumerate(fila_o) if o.chave == chave)
+    o = fila_o[j]
+    if o.presa:
+        return "OF fixa/travada: não sai do lugar"
+    sem = fila_o[:j] + fila_o[j + 1:]
+    da_tempo = False
+    for maq, fila in mod.filas.items():
+        novo = mod.copia_para(o, maq, maq_o)
+        if novo is None:
+            continue
+        base = sem if maq == maq_o else fila
+        pos = mod.primeira_livre(base)
+        teste = base[:pos] + [novo] + base[pos:]
+        if mod.atraso(novo, mod.fins(maq, teste)[pos]) is None:
+            da_tempo = True
+    if not da_tempo:
+        return ("nem como a 1ª depois das fixas, em nenhuma máquina que roda, termina no prazo: negociar a data "
+                "com o comercial ou ganhar tempo (hora extra, kg/h maior)")
+    return ("dá tempo adiantando, mas toda posição que recupera faz outra OF no prazo atrasar ou quebra a "
+            "sequência de formulação: decidir qual pedido segura")
+
+
+def avaliar_programacao(cen: Cenario, max_passos: int = MAX_PASSOS) -> Avaliacao:
+    ind = indicadores(cen)
+    it = cen.itens
+    vazio = pd.DataFrame()
+    if it.empty:
+        return Avaliacao(BOA, 100, ["Nenhuma OF nas máquinas do cenário."], [], vazio, vazio, ind, ind)
+    nao_atende = int((it["atraso"] == NAO_ATENDE).sum())
+    nota = (100 - 25 * ind["prioritarios_fora"] - 10 * ind["passam_a_atrasar"] - 5 * nao_atende
+            - 3 * ind["ja_atrasadas"] - 3 * ind["quebras"] - ind["saltos_micra"])
+    nota = int(max(0, min(100, nota)))
+
+    # plano de melhoria
+    mod = _Modelo(cen)
+    prioritarias = {o.chave for fila in mod.filas.values() for o in fila if o.prioritario}
+    passos = []
+    for _ in range(max_passos):
+        atrasadas = mod.todas_atrasadas()
+        if not atrasadas:
+            break
+        alvos = sorted(atrasadas, key=lambda c: (c not in prioritarias, -atrasadas[c][1]))
+        m = _melhor_mudanca(mod, alvos, atrasadas, prioritarias)
+        if m is None:
+            break
+        mod.filas[m["para_maquina"]] = m.pop("_teste")
+        sem = m.pop("_sem")
+        if m["para_maquina"] != m["de_maquina"]:
+            mod.filas[m["de_maquina"]] = sem
+        m["passo"] = len(passos) + 1
+        passos.append(m)
+    plano = pd.DataFrame(passos, columns=["passo", "chave", "de_maquina", "de_ordem", "para_maquina", "para_ordem",
+                                          "atraso_antes_h", "atraso_depois_h", "sai_do_atraso", "ganho_total_h",
+                                          "prioritario"])
+    restantes = mod.todas_atrasadas()
+    continuam = pd.DataFrame([{"chave": k, "maquina": maq, "atraso_h": round(a, 1),
+                               "prioritario": _prioritaria(mod, k), "motivo": _por_que_continua(mod, k, maq)}
+                              for k, (maq, a) in sorted(restantes.items(), key=lambda x: -x[1][1])],
+                             columns=["chave", "maquina", "atraso_h", "prioritario", "motivo"])
+    recuperaveis = int(plano["sai_do_atraso"].sum()) if not plano.empty else 0
+    horas_antes = sum(a for _, a in _Modelo(cen).todas_atrasadas().values())
+    horas_depois = sum(a for _, a in restantes.values())
+
+    motivos = []
+    if ind["prioritarios_fora"]:
+        motivos.append(f"{ind['prioritarios_fora']} OF(s) de cliente prioritário fora do prazo.")
+    if ind["passam_a_atrasar"]:
+        motivos.append(f"{ind['passam_a_atrasar']} OF(s) que estavam no prazo passam a atrasar nesta fila.")
+    if nao_atende:
+        motivos.append(f"{nao_atende} pedido(s) novo(s) / não programada(s) não atendem a data OTD.")
+    if ind["ja_atrasadas"]:
+        motivos.append(f"{ind['ja_atrasadas']} OF(s) já estavam atrasadas no planejamento "
+                       f"({horas_antes:.0f} h de atraso somando todas as OFs fora do prazo).")
+    if ind["quebras"]:
+        motivos.append(f"{ind['quebras']} pedido(s) no meio de uma sequência de formulação.")
+    if ind["saltos_micra"]:
+        motivos.append(f"{ind['saltos_micra']} salto(s) de micra (gerar OF de estoque intermediária).")
+    if not motivos:
+        motivos.append("Nenhuma OF fora do prazo, sem quebra de sequência e sem salto de micra.")
+
+    if ind["prioritarios_fora"] or ind["passam_a_atrasar"]:
+        situacao = RUIM
+    elif nao_atende or recuperaveis or ind["quebras"] or ind["saltos_micra"]:
+        situacao = ATENCAO
+    else:
+        situacao = BOA
+    if situacao != RUIM and nota < 50:
+        situacao = RUIM
+
+    sugestoes = []
+    if not plano.empty:
+        sugestoes.append(f"Aplicar o plano de melhoria: {len(plano)} mudança(s) tiram {recuperaveis} OF(s) do atraso e "
+                         f"reduzem o atraso total de {horas_antes:.0f} h para {horas_depois:.0f} h, sem atrasar quem "
+                         "está no prazo.")
+    if ind["passam_a_atrasar"] and cen.regras.modo == ATENDER_PEDIDO:
+        sugestoes.append("Gerar a sugestão de novo com o modo NÃO ATRASAR A FILA: nenhum pedido novo entra na frente "
+                         "de OF que está no prazo.")
+    if ind["quebras"]:
+        sugestoes.append("Os pedidos no meio de sequência (coluna alerta) podem ir para a troca de formulação mais "
+                         "próxima: gerar com a sequência NÃO QUEBRAR.")
+    if ind["saltos_micra"]:
+        sugestoes.append("Nos saltos de micra, gerar a OF de estoque de micra intermediária indicada na coluna salto de "
+                         "micra (ou agrupar a máquina por formulação, que ordena a micra dentro do grupo).")
+    if not continuam.empty:
+        sem_tempo = continuam["motivo"].str.startswith("nem como").sum()
+        sugestoes.append(f"{len(continuam)} OF(s) continuam atrasadas"
+                         + (f" ({sem_tempo} sem tempo nem como a primeira: negociar a data)" if sem_tempo else "")
+                         + " — veja a lista abaixo.")
+    return Avaliacao(situacao, nota, motivos, sugestoes, plano, continuam, ind,
+                     {"horas_atraso_antes": round(horas_antes, 1), "horas_atraso_depois": round(horas_depois, 1),
+                      "recuperadas": recuperaveis})
+
+
+def aplicar_plano(cen: Cenario, plano: pd.DataFrame, ate: int | None = None) -> list[str]:
+    """Aplica os passos do plano (até o passo `ate`) no cenário, um por vez. Devolve os avisos."""
+    avisos = []
+    for r in plano.itertuples():
+        if ate is not None and r.passo > ate:
+            break
+        avisos += aplicar_mudancas(cen, pd.DataFrame([{"chave": r.chave, "maquina": r.para_maquina,
+                                                       "ordem": r.para_ordem}]))
+    return avisos

@@ -7,21 +7,28 @@ from core import contexto, ui
 c = ui.ctx()
 ui.cabecalho("Encaixe em máquinas",
              f"As {c.params['ordens_fixas']} primeiras OFs de cada máquina ficam fixas. "
-             "Sequência de formulação pelo grupo de formulação da OF e o rank do cadastro: com NÃO QUEBRAR o pedido "
-             "novo só entra entre OFs cujo rank comporta o dele (no fim da fila sempre pode), mesmo que fique atrasado; "
-             "com PODE QUEBRAR ele entra no meio só se for preciso para atender o prazo ou não atrasar outra OF. "
+             "NÃO ATRASAR A FILA: o pedido só entra onde nenhuma OF da máquina passa da data OTD (nem as já atrasadas "
+             "atrasam mais); ATENDER O PEDIDO: o pedido cumpre a data dele empurrando a fila, atrasando o mínimo. "
+             "A sequência de formulação é sempre respeitada (grupo de formulação da OF e rank do cadastro: o pedido "
+             "só entra entre OFs cujo rank comporta o dele; no fim da fila sempre pode) e, entre posições iguais, fica "
+             "ao lado da mesma formulação. "
              f"Micra: entre posições iguais, prefere a que não cria salto maior que {c.params.get('salto_micra', 5):g} µ; "
              "a fila mostra cada salto com a micra da OF de estoque a gerar entre as duas. "
              "Regras das máquinas e rank das formulações em Cadastros.", ("carteira", "estoque", "solicitacoes", "planejamento"))
 
-# Regra 7: a opção fica salva nos parâmetros; o encaixe roda as duas e mostra a outra nas colunas comparar_*
-opcoes = ["NÃO QUEBRAR", "PODE QUEBRAR"]
-atual = 1 if int(c.params.get("pode_quebrar_sequencia", 0)) else 0
+# Regra 11: o modo fica salvo nos parâmetros; o encaixe roda os dois e mostra o outro nas colunas comparar_*
+opcoes = ["NÃO ATRASAR A FILA", "ATENDER O PEDIDO"]
+rotulos = {"NÃO ATRASAR A FILA": "1.1 Não atrasar o que já está na máquina",
+           "ATENDER O PEDIDO": "1.2 Atender o pedido empurrando a fila"}
+atual = 1 if int(c.params.get("modo_encaixe", 0)) else 0
 col_seq, col_alt, col_micra = st.columns([2, 1.3, 1])
-escolha = col_seq.radio("Sequência de formulação", opcoes, index=atual, horizontal=True,
-                        help="As filas das máquinas seguem esta opção; as colunas comparar_* dos pedidos mostram a outra.")
+escolha = col_seq.radio("Encaixar respeitando as datas", opcoes, index=atual, horizontal=True, format_func=rotulos.get,
+                        help="1.1: o pedido só entra numa posição em que nenhuma OF da máquina passa da data OTD; se não "
+                             "houver posição no prazo, vai para onde termina mais cedo sem atrasar ninguém. 1.2: o pedido "
+                             "cumpre a data dele e o que já está na máquina é empurrado (atrasando o mínimo). As filas "
+                             "seguem esta opção; as colunas comparar_* dos pedidos mostram a outra.")
 if opcoes.index(escolha) != atual:
-    contexto.salvar_parametro("pode_quebrar_sequencia", opcoes.index(escolha))
+    contexto.salvar_parametro("modo_encaixe", opcoes.index(escolha))
     st.rerun()
 # Regra 9: fica salvo nos parâmetros (o mesmo de Configuração > Parâmetros) e vale também na simulação
 salto_atual = float(c.params.get("salto_micra", 5.0))

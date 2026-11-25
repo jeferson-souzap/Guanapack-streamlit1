@@ -45,10 +45,10 @@ Início e na barra lateral.
 | Módulo | O que mostra |
 |---|---|
 | **Início** | Situação dos relatórios e atalhos |
-| **Simulação da programação** | Cenários de fila: regras (sequência de formulação, subida e descida de micra, prazo × formulação, setup, OFs fixas), ajuste à mão, travas, desfazer, Gantt e cenários salvos para comparar |
+| **Simulação da programação** | Cenários de fila: regras (modo do encaixe, sequência de formulação, subida e descida de micra, prazo × formulação, setup, OFs fixas), ajuste à mão, travas, desfazer, Gantt, cenários salvos para comparar e **avaliação** (programação BOA / ATENÇÃO / RUIM, nota e plano de mudanças que tira OFs do atraso sem atrasar quem está no prazo) |
 | **Consulta de pedido** | Tudo sobre um pedido numa tela: CTLR (data OTD), pallets do estoque, reserva, encaixe, fila sugerida, planejamento, a simulação em edição e anotações livres no pedido (com usuário e PC; resolver/reabrir/excluir) |
 | **Reserva de estoque** | Qual pallet do estoque reservar para cada pedido da carteira (exato ou alternativo) e quem fica sem estoque |
-| **Encaixe em máquinas** | Onde produzir os pedidos sem estoque (e, se ligar a opção, os atendidos só por estoque alternativo), fila sugerida (com os saltos de micra e a OF de estoque intermediária a gerar) e gráfico de Gantt por máquina |
+| **Encaixe em máquinas** | Onde produzir os pedidos sem estoque (e, se ligar a opção, os atendidos só por estoque alternativo) em dois modos — **1.1 não atrasar o que já está na máquina** ou **1.2 atender o pedido empurrando a fila**, sempre respeitando a sequência de formulação —, comparação com o outro modo, fila sugerida (com os saltos de micra e a OF de estoque intermediária a gerar) e gráfico de Gantt por máquina |
 | **Cadastros** | Rank de formulações, clientes prioritários e regras das máquinas (edição como planilha) |
 | **Configuração** | Pasta por usuário/PC, nomes dos arquivos, parâmetros das regras, módulos e backup |
 

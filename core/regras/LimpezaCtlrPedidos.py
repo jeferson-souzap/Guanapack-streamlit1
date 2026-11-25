@@ -35,6 +35,9 @@ def calcular_status_pedido(df: pd.DataFrame, chaves_solicitacao: set) -> pd.Seri
     CANCELADO só com cancelado = SIM. anulado = SIM é a NF anulada depois do faturamento (o pedido não
     foi cancelado): com entrega ao cliente fica ENTREGUE; sem entrega, NF ANULADA (decisão do usuário
     em 10/11/2026; antes o anulado contava como cancelado).
+    FECHADO: fechado = SIM sem faturamento (nem entrega): o pedido foi encerrado no ERP sem sair NF
+    (decisão do usuário em 25/11/2026; antes ficava EM CARTEIRA, EM ROMANEIO etc.). Não conta como em
+    aberto nem como atraso OTD.
     """
     chave = list(zip(df['num_ped'], df['num_prog']))
     tem_solicitacao = pd.Series([k in chaves_solicitacao for k in chave], index=df.index)
@@ -45,12 +48,13 @@ def calcular_status_pedido(df: pd.DataFrame, chaves_solicitacao: set) -> pd.Seri
         df['dt_entrega_cli'].notna(),
         sim('anulado'),
         df['dt_faturamento'].notna(),
+        sim('fechado') if 'fechado' in df else pd.Series(False, index=df.index),
         df['dt_romaneio'].notna(),
         df['dt_reserva'].notna(),
         tem_solicitacao,
         df['dt_aprovado'].notna(),
     ]
-    status = ['CANCELADO', 'ENTREGUE', 'NF ANULADA', 'FATURADO', 'EM ROMANEIO', 'RESERVADO',
+    status = ['CANCELADO', 'ENTREGUE', 'NF ANULADA', 'FATURADO', 'FECHADO', 'EM ROMANEIO', 'RESERVADO',
               'SOLICITAÇÃO DE RESERVA', 'EM CARTEIRA']
     return pd.Series(np.select(condicoes, status, default='AGUARDANDO APROVAÇÃO'), index=df.index)
 
@@ -98,14 +102,15 @@ def processar_dataframe_ctlr(df: pd.DataFrame, df_solicitacoes: pd.DataFrame) ->
     chaves_solicitacao = set(zip(df_solicitacoes['num_pedido'], df_solicitacoes['seq']))
     df_proc['status_pedido'] = calcular_status_pedido(df_proc, chaves_solicitacao)
     cancelado = df_proc['status_pedido'] == 'CANCELADO'
+    fechado = df_proc['status_pedido'] == 'FECHADO'      # encerrado sem NF: não tem OTD
 
     # 6. Atraso OTD: faturamento (ou hoje, se não faturado) contra a data de embarque atual
     hoje = pd.Timestamp.now().normalize()
     data_realizada = df_proc['dt_faturamento'].dt.normalize().fillna(hoje)
     dias_atraso = (data_realizada - df_proc['embarque']).dt.days
-    df_proc['otd_dias_atraso'] = dias_atraso.clip(lower=0).where(~cancelado)
+    df_proc['otd_dias_atraso'] = dias_atraso.clip(lower=0).where(~cancelado & ~fechado)
     df_proc['otd_status'] = np.where(dias_atraso > 0, 'ATRASADO', 'NO PRAZO')
-    df_proc.loc[cancelado | dias_atraso.isna(), 'otd_status'] = None
+    df_proc.loc[cancelado | fechado | dias_atraso.isna(), 'otd_status'] = None
 
     # 7. Lead time de estoque: pedido em aberto com embarque para o dia da emissão ou o seguinte.
     #    Usa o embarque atual para o pedido sair da lista quando o comercial trocar a data.

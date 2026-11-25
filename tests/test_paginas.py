@@ -125,3 +125,21 @@ def test_consulta_de_um_pedido_real(com_relatorios_reais):
     assert not _erros(at), _erros(at)
     linhas = {str(m.value).split(" · ")[0]: str(m.value) for m in at.markdown if " · " in str(m.value)}
     assert "**Planejamento das máquinas**" in linhas and "0 linha" not in linhas["**Planejamento das máquinas**"]
+
+
+def test_simulacao_avalia_e_aplica_o_plano(sem_relatorios, monkeypatch):
+    """Simulação com uma fila de teste (OF 5 atrasada no fim): a aba Avaliação mostra o plano e aplica."""
+    from core.regras.Prioridade import ListaPrioritarios
+    from tests.test_encaixe import RANK, REGRAS, of_form
+    ofs = [of_form(i, 10 * i, "MN 250%") for i in range(6)]
+    ofs[5].update(pedido=105, seq_prog=1, dt_otd=pd.Timestamp("2026-11-11"))
+    ent = {"plan": pd.DataFrame(ofs), "reserva": pd.DataFrame(columns=["num_pedido", "prog", "tem_estoque"]),
+           "regras": REGRAS, "prioritarios": ListaPrioritarios([]), "mapa": {}, "rank": RANK}
+    monkeypatch.setattr(pipeline.Contexto, "entradas_encaixe", lambda self: ent)
+    at = _abrir("modulos/simulacao.py")
+    assert not _erros(at), _erros(at)
+    assert any("Programação ATENÇÃO" in str(m.value) for m in at.markdown)
+    botao = next(b for b in at.button if b.label == "Aplicar o plano")
+    botao.click().run()
+    assert not _erros(at), _erros(at)
+    assert any("Programação BOA" in str(m.value) for m in at.markdown)

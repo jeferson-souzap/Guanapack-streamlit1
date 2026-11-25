@@ -26,7 +26,7 @@ from core import cadastros, contexto, relatorios
 from core.regras import AtrasoOtd, EncaixeMaquinas, ReservaCarteira
 from core.regras.AtrasoOtd import calcular_atraso_otd, mapa_data_otd
 from core.regras.ConferenciaLimpeza import conferir_limpeza
-from core.regras.EncaixeMaquinas import NAO_QUEBRAR, PODE_QUEBRAR, gerar_encaixe
+from core.regras.EncaixeMaquinas import MODOS_ENCAIXE, NAO_QUEBRAR, gerar_encaixe
 from core.regras.LimpezaCtlrPedidos import eh_familia_valida, processar_dataframe_ctlr
 from core.regras.LimpezaDataframe import processar_dataframe_estoque
 from core.regras.LimpezaPlanejamento import filtrar_extrusao_stretch, processar_dataframe_planejamento
@@ -47,6 +47,7 @@ def _aplicar_parametros(p: dict):
     EncaixeMaquinas.ORDENS_FIXAS = int(p["ordens_fixas"])
     EncaixeMaquinas.SALTO_MICRA = float(p["salto_micra"])
     EncaixeMaquinas.ENCAIXAR_ALTERNATIVOS = bool(int(p.get("encaixar_alternativos", 0)))
+    EncaixeMaquinas.MODO_ENCAIXE = EncaixeMaquinas.MODOS_ENCAIXE[1 if int(p.get("modo_encaixe", 0)) else 0]
     ReservaCarteira.TOLERANCIA_QTD = float(p["tolerancia_qtd"])
     ReservaCarteira.TOLERANCIA_MICRA = float(p["tolerancia_micra"])
     ReservaCarteira.MAX_DEGRAUS_FORMULACAO = int(p["max_degraus_formulacao"])
@@ -113,9 +114,9 @@ def etapa_encaixe(chave_reserva: tuple, chave_atraso: tuple, sig_plan, maquinas:
     mapa = mapa_data_otd(ctlr[['num_ped', 'num_prog', 'data_otd']]) if ctlr is not None else {}
     regras = montar_regras([dict(m) for m in maquinas])
     rank = dict(chave_reserva[3])          # cadastro de formulações: sequência de formulação da máquina
-    opcao = PODE_QUEBRAR if int(dict(params).get("pode_quebrar_sequencia", 0)) else NAO_QUEBRAR   # regra 7
+    modo = MODOS_ENCAIXE[1 if int(dict(params).get("modo_encaixe", 0)) else 0]                     # regra 11
     return gerar_encaixe(stretch, reserva, regras, ListaPrioritarios([dict(l) for l in prioritarios]), mapa,
-                         rank=rank, opcao=opcao, salto_micra=float(dict(params).get("salto_micra", 5.0)),
+                         rank=rank, opcao=NAO_QUEBRAR, modo=modo, salto_micra=float(dict(params).get("salto_micra", 5.0)),
                          encaixar_alternativos=bool(int(dict(params).get("encaixar_alternativos", 0))))
 
 

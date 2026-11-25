@@ -58,6 +58,18 @@ Regras (combinadas com o usuário em 09 e 10/11/2026):
    mesmas regras dos pedidos sem estoque, para o analista comparar produzir o exato com usar o
    alternativo. A tabela de pedidos mostra o alternativo na coluna estoque_alternativo e a fila
    sugerida avisa na observação. Desligado (padrão), só entram os pedidos sem estoque.
+11. Modo do encaixe (25/11/2026, pedido do usuário: "o importante é não atrasar nada"). Duas opções:
+   1.1 NÃO ATRASAR A FILA (padrão): respeita as datas de quem já está na máquina. O pedido só entra
+       numa posição em que nenhuma OF empurrada passa da data OTD dela, e também não empurra OF que já
+       está atrasada (atrasaria mais). No fim da fila sempre pode. Entre as posições permitidas, a
+       que atende o prazo do pedido; se nenhuma atende, a que termina mais cedo.
+   1.2 ATENDER O PEDIDO: o pedido novo cumpre a data dele empurrando para frente o que já está na
+       máquina; entre as posições que atendem, a que faz menos OFs passarem a atrasar (as de clientes
+       prioritários primeiro) e depois a que empurra menos OFs já atrasadas.
+   Nos dois modos a sequência de formulação é sempre respeitada no encaixe (NÃO QUEBRAR; o PODE
+   QUEBRAR fica só na simulação) e, entre posições iguais no prazo, fica onde a formulação melhor
+   encaixa (ao lado de OF da mesma formulação) antes de olhar a micra. gerar_encaixe roda os dois
+   modos: as filas seguem o escolhido e as colunas comparar_* mostram o outro.
 """
 import math
 import re
@@ -76,6 +88,19 @@ MIN_HORAS_TAXA = 0.25        # OF mais curta que isso não entra na conta do kg/
 DIAS_OTD = 2                 # data OTD = embarque - 2 dias (pedido sem data no CTLR)
 SALTO_MICRA = 5.0            # regra 9: maior diferença de micra entre duas OFs seguidas sem ser salto
 ENCAIXAR_ALTERNATIVOS = False  # regra 10: encaixa também os pedidos atendidos só por estoque alternativo
+
+NAO_ATRASAR_FILA = "NÃO ATRASAR A FILA"   # regra 11, opção 1.1
+ATENDER_PEDIDO = "ATENDER O PEDIDO"       # regra 11, opção 1.2 (empurra a fila)
+MODOS_ENCAIXE = (NAO_ATRASAR_FILA, ATENDER_PEDIDO)
+MODO_ENCAIXE = NAO_ATRASAR_FILA
+
+
+def outro_modo(modo: str) -> str:
+    return ATENDER_PEDIDO if modo == NAO_ATRASAR_FILA else NAO_ATRASAR_FILA
+
+
+def normalizar_modo(modo) -> str:
+    return ATENDER_PEDIDO if str(modo or "").strip().upper() == ATENDER_PEDIDO else NAO_ATRASAR_FILA
 
 NOVO = "NOVO NA MÁQUINA"
 OF_ESTOQUE = "OF DE ESTOQUE"
@@ -173,6 +198,7 @@ class Opcao:
     mesma_formulacao: bool = False   # fica ao lado de OF da mesma formulação (não cria troca de formulação)
     quebra: bool = False             # entra no meio de uma sequência de formulação (só com PODE QUEBRAR)
     saltos_micra: int = 0            # regra 9: saltos de micra novos que a posição cria na fila
+    agrava: int = 0                  # regra 11: OFs já atrasadas que a posição empurra (atrasam mais)
 
 
 def _texto(valor) -> str:
@@ -288,8 +314,9 @@ class Encaixe:
                  prioritarios: ListaPrioritarios | None = None, mapa_otd: dict | None = None, agora=None,
                  rank: dict | None = None, pode_quebrar: bool = False,
                  ordens_fixas: int | None = None, fator_kgh: float = 1.0, salto_micra: float | None = None,
-                 encaixar_alternativos: bool | None = None):
+                 encaixar_alternativos: bool | None = None, modo: str | None = None):
         self.regras = regras
+        self.modo = normalizar_modo(MODO_ENCAIXE if modo is None else modo)               # regra 11
         self.encaixar_alternativos = (ENCAIXAR_ALTERNATIVOS if encaixar_alternativos is None
                                       else bool(encaixar_alternativos))                   # regra 10
         self.salto_micra = SALTO_MICRA if salto_micra is None else float(salto_micra)   # regra 9
@@ -502,8 +529,10 @@ class Encaixe:
         fim = ini + dur
         atrasados = [it for it in fila[pos - 1:]
                      if it.prazo is not None and it.fim < it.prazo and it.fim + dur >= it.prazo]
+        agravados = [it for it in fila[pos - 1:] if it.prazo is not None and it.fim >= it.prazo]
         junto = (pos > 1 and fila[pos - 2].id_pa == p.id_pa) or (pos <= n and fila[pos - 1].id_pa == p.id_pa)
         return Opcao(maq=m, pos=pos, ini=ini, fim=fim, atende=limite is None or fim < limite, n_atrasos=len(atrasados),
+                     agrava=len(agravados),
                      n_atrasos_prior=sum(1 for it in atrasados if it.prioritario),
                      atrasos=", ".join(self.nome(it) for it in atrasados), junto=junto,
                      empurra=n - pos + 1, prioritario=p.prioritario)
@@ -543,11 +572,12 @@ class Encaixe:
             return False
         return not (min(antes, depois) <= nivel_pedido <= max(antes, depois))
 
-    @staticmethod
-    def melhor_que(a: Opcao, b: Opcao | None) -> bool:
-        """a é melhor que b? (regras 4 e 5 do cabeçalho)"""
+    def melhor_que(self, a: Opcao, b: Opcao | None) -> bool:
+        """a é melhor que b? (regras 4, 5 e 11 do cabeçalho)"""
         if b is None:
             return True
+        if self.modo == NAO_ATRASAR_FILA:
+            return self._melhor_sem_atrasar(a, b)
         if a.n_atrasos_prior != b.n_atrasos_prior:
             return a.n_atrasos_prior < b.n_atrasos_prior
         if a.atende != b.atende:
@@ -561,30 +591,52 @@ class Encaixe:
                 return a.fim < b.fim
             if a.n_atrasos != b.n_atrasos:
                 return a.n_atrasos < b.n_atrasos
+            if a.agrava != b.agrava:
+                return a.agrava < b.agrava
             return a.saltos_micra < b.saltos_micra
         if a.atende:
             if a.n_atrasos != b.n_atrasos:
                 return a.n_atrasos < b.n_atrasos
+            if a.agrava != b.agrava:                          # regra 11: não atrasa mais quem já está atrasado
+                return a.agrava < b.agrava
             if a.quebra != b.quebra:
                 return not a.quebra
-            if a.saltos_micra != b.saltos_micra:              # regra 9: transição de micra suave
-                return a.saltos_micra < b.saltos_micra
-            if a.mesma_formulacao != b.mesma_formulacao:      # regra 6: evita troca de formulação a mais
-                return a.mesma_formulacao
-            if a.junto != b.junto:
-                return a.junto
-            if a.empurra != b.empurra:
-                return a.empurra < b.empurra
-            return a.fim < b.fim
+            return self._desempate(a, b)
         if a.quebra != b.quebra:
             return not a.quebra
         if a.fim != b.fim:
             return a.fim < b.fim
         if a.n_atrasos != b.n_atrasos:
             return a.n_atrasos < b.n_atrasos
+        if a.agrava != b.agrava:
+            return a.agrava < b.agrava
         if a.saltos_micra != b.saltos_micra:
             return a.saltos_micra < b.saltos_micra
         return a.junto and not b.junto
+
+    @staticmethod
+    def _desempate(a: Opcao, b: Opcao) -> bool:
+        """Posições iguais no prazo: onde a formulação melhor encaixa (regras 6 e 11), micra (regra 9),
+        junto do mesmo produto, empurra menos OFs, termina mais cedo."""
+        if a.mesma_formulacao != b.mesma_formulacao:          # regra 6/11: evita troca de formulação a mais
+            return a.mesma_formulacao
+        if a.saltos_micra != b.saltos_micra:                  # regra 9: transição de micra suave
+            return a.saltos_micra < b.saltos_micra
+        if a.junto != b.junto:
+            return a.junto
+        if a.empurra != b.empurra:
+            return a.empurra < b.empurra
+        return a.fim < b.fim
+
+    def _melhor_sem_atrasar(self, a: Opcao, b: Opcao) -> bool:
+        """Regra 11, opção 1.1: só chegam aqui posições que não atrasam ninguém da fila."""
+        if a.atende != b.atende:
+            return a.atende
+        if a.quebra != b.quebra:
+            return not a.quebra
+        if (not a.atende or a.prioritario) and a.fim != b.fim:   # não atende (ou prioritário): o mais cedo
+            return a.fim < b.fim
+        return self._desempate(a, b)
 
     def encaixar_pedido(self, p: Pedido):
         limite = self.prazo_do_pedido(p)
@@ -610,6 +662,8 @@ class Encaixe:
                 if quebra and not self.pode_quebrar:
                     continue                               # regra 6: não entra no meio da sequência
                 op = self.avaliar_posicao(m, pos, dur, limite, p)
+                if self.modo == NAO_ATRASAR_FILA and (op.n_atrasos or op.agrava):
+                    continue                               # regra 11 (1.1): não atrasa quem já está na máquina
                 op.kgh, op.taxa_origem, op.quebra = kgh, origem, quebra
                 op.mesma_formulacao = nivel is not None and (
                     (pos > 1 and niveis[pos - 2] == nivel) or (pos <= len(niveis) and niveis[pos - 1] == nivel))
@@ -743,6 +797,11 @@ class Encaixe:
             total += sum(e_salto(a, b, self.salto_micra) for a, b in zip(micras, micras[1:]))
         return total
 
+    def passam_a_atrasar(self) -> int:
+        """OFs do planejamento que estavam no prazo e passam a atrasar com o encaixe."""
+        return sum(1 for it in self.itens if not it.novo and it.prazo is not None
+                   and it.fim0 < it.prazo <= it.fim)
+
     def _resumo_nao_prog(self) -> str:
         """Regra 8: quantas OFs não programadas entraram e quantas ficaram sem máquina."""
         if not self.nao_programadas:
@@ -767,7 +826,7 @@ class Encaixe:
         estoque = sum(1 for p in self.pedidos if p.tipo == OF_ESTOQUE)
         ligados = sum(1 for p in self.pedidos if p.tipo == OF_NAO_PROG)
         sem = sum(1 for p in self.pedidos if p.tipo == SEM_MAQUINA)
-        opcao = PODE_QUEBRAR if self.pode_quebrar else NAO_QUEBRAR
+        opcao = f"{self.modo} | {PODE_QUEBRAR if self.pode_quebrar else NAO_QUEBRAR}"
         extra = f", {quebram} {'quebra' if quebram == 1 else 'quebram'} a sequência" if quebram else ""
         extra2 = f" | já com OF não programada: {ligados}" if ligados else ""
         alt = sum(1 for p in self.pedidos if p.alternativo)
@@ -776,6 +835,7 @@ class Encaixe:
         return (f"{self._resumo_nao_prog()}{qtd} | {opcao} a sequência de formulação | "
                 f"novos na máquina: {len(novos)} ({atendem} atendem o embarque{extra})"
                 f" | por OF de estoque: {estoque}{extra2} | sem máquina: {sem}"
+                f" | OFs que passam a atrasar: {self.passam_a_atrasar()}"
                 f" | saltos de micra nas filas (> {_fmt(self.salto_micra)} µ): {self.saltos_micra()}")
 
 
@@ -785,11 +845,11 @@ def _chave_linha(r) -> str:
 
 
 def _comparar(pedidos: pd.DataFrame, outra: "Encaixe", opcao_outra: str) -> tuple[pd.DataFrame, int]:
-    """Colunas comparar_* (regra 7): o resultado do mesmo pedido na outra opção."""
+    """Colunas comparar_* (regra 11): o resultado do mesmo pedido no outro modo de encaixe."""
     tab = outra.tabela_pedidos()
     ref = {_chave_linha(r): r for r in tab.itertuples()}
-    cols = {"comparar_opcao": [], "comparar_sugestao": [], "comparar_maquina": [],
-            "comparar_fim_previsto": [], "comparar_atende_embarque": []}
+    cols = {"comparar_opcao": [], "comparar_sugestao": [], "comparar_maquina": [], "comparar_depois_de": [],
+            "comparar_fim_previsto": [], "comparar_atende_embarque": [], "comparar_ofs_que_passam_a_atrasar": []}
     difere = 0
     for r in pedidos.itertuples():
         o = ref.get(_chave_linha(r))
@@ -800,8 +860,10 @@ def _comparar(pedidos: pd.DataFrame, outra: "Encaixe", opcao_outra: str) -> tupl
             continue
         cols["comparar_sugestao"].append(o.sugestao + (" (quebra a sequência)" if o.quebra_sequencia == "SIM" else ""))
         cols["comparar_maquina"].append(o.maquina)
+        cols["comparar_depois_de"].append(o.depois_de)
         cols["comparar_fim_previsto"].append(o.fim_previsto)
         cols["comparar_atende_embarque"].append(o.atende_embarque)
+        cols["comparar_ofs_que_passam_a_atrasar"].append(o.ofs_que_passam_a_atrasar)
         if _texto(r.atende_embarque) != _texto(o.atende_embarque) or _texto(r.maquina) != _texto(o.maquina):   # vazio pode vir NaN
             difere += 1
     return pedidos.assign(**cols), difere
@@ -809,19 +871,19 @@ def _comparar(pedidos: pd.DataFrame, outra: "Encaixe", opcao_outra: str) -> tupl
 
 def gerar_encaixe(plan, reserva, regras, prioritarios=None, mapa_otd=None, agora=None, rank=None,
                   opcao: str = NAO_QUEBRAR, salto_micra: float | None = None,
-                  encaixar_alternativos: bool | None = None):
+                  encaixar_alternativos: bool | None = None, modo: str | None = None):
     """Roda o encaixe e devolve (pedidos, filas, resumo). rank = {formulação: rank} do cadastro de
     formulações, para não quebrar a sequência de formulação das máquinas (regra 6).
-    opcao = NÃO QUEBRAR / PODE QUEBRAR (regra 7): roda também a outra opção, que vai nas colunas
-    comparar_* da tabela de pedidos e no fim do resumo."""
+    modo = NÃO ATRASAR A FILA / ATENDER O PEDIDO (regra 11): roda também o outro modo, que vai nas
+    colunas comparar_* da tabela de pedidos e no fim do resumo. opcao = NÃO QUEBRAR (padrão, o da tela)
+    ou PODE QUEBRAR (regra 7), a mesma nos dois modos."""
     opcao = PODE_QUEBRAR if str(opcao).strip().upper() == PODE_QUEBRAR else NAO_QUEBRAR
-    outra = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank,
-                    pode_quebrar=(outra_opcao(opcao) == PODE_QUEBRAR), salto_micra=salto_micra,
-                    encaixar_alternativos=encaixar_alternativos).executar()
-    enc = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank,
-                  pode_quebrar=(opcao == PODE_QUEBRAR), salto_micra=salto_micra,
-                    encaixar_alternativos=encaixar_alternativos).executar()
-    pedidos, difere = _comparar(enc.tabela_pedidos(), outra, outra_opcao(opcao))
-    resumo = (f"{enc.resumo()} || comparação, {outra_opcao(opcao)}: {outra.resumo_novos()} "
-              f"({difere} pedidos mudam)")
+    modo = normalizar_modo(MODO_ENCAIXE if modo is None else modo)
+    comum = dict(pode_quebrar=(opcao == PODE_QUEBRAR), salto_micra=salto_micra,
+                 encaixar_alternativos=encaixar_alternativos)
+    outra = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank, modo=outro_modo(modo), **comum).executar()
+    enc = Encaixe(plan, reserva, regras, prioritarios, mapa_otd, agora, rank, modo=modo, **comum).executar()
+    pedidos, difere = _comparar(enc.tabela_pedidos(), outra, outro_modo(modo))
+    resumo = (f"{enc.resumo()} || comparação, {outro_modo(modo)}: {outra.resumo_novos()}, "
+              f"{outra.passam_a_atrasar()} OFs passam a atrasar ({difere} pedidos mudam)")
     return pedidos, enc.tabela_filas(), resumo

@@ -42,6 +42,17 @@ def test_anulado_e_nf_anulada_e_nao_cancelado():
     assert df['status_pedido'].tolist() == ['ENTREGUE', 'NF ANULADA', 'CANCELADO']
 
 
+def test_fechado_sem_faturamento_fica_fechado():
+    # fechado = SIM sem NF -> FECHADO (antes ficava EM CARTEIRA / EM ROMANEIO); com NF continua FATURADO
+    df = limpar(linha_ctlr(num_ped=1, fechado='SIM', dt_aprovado='01/10/26', embarque='05/10/26'),
+                linha_ctlr(num_ped=2, fechado='SIM', dt_romaneio='04/10/26'),
+                linha_ctlr(num_ped=3, fechado='SIM', dt_faturamento='08/10/26'),
+                linha_ctlr(num_ped=4, fechado='SIM', cancelado='SIM'),
+                linha_ctlr(num_ped=5, fechado='NÃO', dt_aprovado='01/10/26'))
+    assert df['status_pedido'].tolist() == ['FECHADO', 'FECHADO', 'FATURADO', 'CANCELADO', 'EM CARTEIRA']
+    assert pd.isna(df.at[0, 'otd_status']) and pd.isna(df.at[0, 'otd_dias_atraso'])
+
+
 def test_familias_fora_do_stretch_sao_descartadas():
     df = limpar(linha_ctlr(), linha_ctlr(familia='PEBDL'), linha_ctlr(familia='FILME STRETCH BLUE'))
     assert df['familia'].tolist() == ['FILME STRETCH', 'FILME STRETCH BLUE']

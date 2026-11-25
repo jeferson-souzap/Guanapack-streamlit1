@@ -157,21 +157,63 @@ def test_pode_quebrar_so_quando_precisa_para_o_prazo():
     p = pedidos.iloc[0]
     # quebra na posição que cumpre o prazo e empurra menos OFs (antes da última)
     assert p.depois_de == "OF 5" and p.atende_embarque == "SIM" and p.quebra_sequencia == "SIM"
-    assert p.comparar_opcao == "NÃO QUEBRAR" and p.comparar_atende_embarque == "NÃO"
+    assert p.comparar_opcao == "ATENDER O PEDIDO"          # regra 11: a comparação agora é entre os modos
     assert "QUEBRA" in filas[filas.situacao == "NOVO"].observacao.iloc[0]
-    assert "1 quebra a sequência" in resumo and "1 pedidos mudam" in resumo
+    assert "1 quebra a sequência" in resumo
     # com prazo folgado não quebra: vai para o fim, como no NÃO QUEBRAR
     pedidos, _, _ = encaixar_opcao(ofs, [ped(1, "2026-12-30", formulacao="MO 300%")], "PODE QUEBRAR")
     assert pedidos.iloc[0].depois_de == "OF 6" and pd.isna(pedidos.iloc[0].quebra_sequencia)
 
 
-def test_nao_quebrar_e_o_padrao_e_compara_com_a_outra():
+def test_nao_quebrar_e_o_padrao():
     ofs = [of_form(i, 10 * i, "MN 250%") for i in range(7)]
     pedidos, _, resumo = encaixar_seq(ofs, [ped(1, "2026-11-14", formulacao="MO 300%")])
     p = pedidos.iloc[0]
-    assert p.depois_de == "OF 6" and p.comparar_opcao == "PODE QUEBRAR"
-    assert p.comparar_atende_embarque == "SIM" and "quebra a sequência" in p.comparar_sugestao
-    assert resumo.startswith("1 pedidos sem estoque | NÃO QUEBRAR")
+    assert p.depois_de == "OF 6" and pd.isna(p.quebra_sequencia)
+    assert p.comparar_opcao == "ATENDER O PEDIDO" and "quebra" not in p.comparar_sugestao
+    assert resumo.startswith("1 pedidos sem estoque | NÃO ATRASAR A FILA | NÃO QUEBRAR")
+
+
+# ----- regra 11: modo do encaixe (25/11/2026) -----
+def fila_com_pedido_no_limite(dt_otd_of3):
+    """3 fixas (0-30 h) | OF 3 do pedido 900 (30-40 h, termina 11/11 16h) | OF 4 de estoque (40-50 h)."""
+    ofs = [of(i, 10 * i) for i in range(5)]
+    ofs[3].update(pedido=900, seq_prog=1, dt_otd=pd.Timestamp(dt_otd_of3))
+    return ofs
+
+
+def test_nao_atrasar_a_fila_nao_empurra_quem_esta_no_prazo():
+    # OF 3 tem data OTD 11/11 (atrasa se passar da meia-noite de 12/11). O pedido novo (OTD 11/11) só
+    # atenderia entrando antes da OF 3, o que faz ela atrasar: no 1.1 ele fica depois dela (e não atende)
+    ofs = fila_com_pedido_no_limite("2026-11-11")
+    pedidos, filas, resumo = gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame([ped(1, "2026-11-13")]), REGRAS, None, {},
+                                           agora=INICIO, modo="NÃO ATRASAR A FILA")
+    p = pedidos.iloc[0]
+    assert p.depois_de == "OF 3" and p.atende_embarque == "NÃO" and pd.isna(p.ofs_que_passam_a_atrasar)
+    assert (filas.atraso == "PASSA A ATRASAR").sum() == 0
+    # o outro modo vem nas colunas comparar_*: atende, mas a OF 3 passa a atrasar
+    assert p.comparar_opcao == "ATENDER O PEDIDO" and p.comparar_atende_embarque == "SIM"
+    assert p.comparar_depois_de == "OF 2" and p.comparar_ofs_que_passam_a_atrasar == "OF 3"
+    assert "OFs que passam a atrasar: 0" in resumo
+
+
+def test_atender_o_pedido_empurra_a_fila():
+    ofs = fila_com_pedido_no_limite("2026-11-11")
+    pedidos, filas, _ = gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame([ped(1, "2026-11-13")]), REGRAS, None, {},
+                                      agora=INICIO, modo="ATENDER O PEDIDO")
+    p = pedidos.iloc[0]
+    assert p.depois_de == "OF 2" and p.atende_embarque == "SIM" and p.ofs_que_passam_a_atrasar == "OF 3"
+    assert filas.set_index("id_of").loc["3", "atraso"] == "PASSA A ATRASAR"
+    assert p.comparar_opcao == "NÃO ATRASAR A FILA"
+
+
+def test_nao_atrasar_a_fila_nao_empurra_quem_ja_esta_atrasado():
+    # OF 3 já está atrasada (OTD 10/11): no 1.1 o pedido não entra antes dela, mesmo com prazo folgado
+    ofs = fila_com_pedido_no_limite("2026-11-10")
+    pedidos, filas, _ = gerar_encaixe(pd.DataFrame(ofs), pd.DataFrame([ped(1, "2026-11-30")]), REGRAS, None, {},
+                                      agora=INICIO, modo="NÃO ATRASAR A FILA")
+    assert pedidos.iloc[0].depois_de == "OF 4"           # depois da OF 3 e junto ao fim (empurra menos)
+    assert filas.set_index("id_of").loc["3", "empurrado_h"] == 0
 
 
 def test_sem_pedido_sem_estoque_as_tabelas_saem_com_as_colunas():

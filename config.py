@@ -85,8 +85,9 @@ PARAMETROS = {
         Parametro("tolerancia_micra", 2.0, "float", "Micra aceita no alternativo (± micra)", "Reserva"),
         Parametro("max_degraus_formulacao", 1, "int", "Degraus que o alternativo pode subir no rank de formulação", "Reserva"),
         Parametro("ordens_fixas", 3, "int", "Primeiras OFs de cada máquina que não mudam de lugar no encaixe", "Encaixe"),
-        Parametro("pode_quebrar_sequencia", 0, "int", "Sequência de formulação no encaixe: 0 = NÃO QUEBRAR, 1 = PODE QUEBRAR "
-                  "(só quando é preciso para atender o prazo ou não atrasar outra OF)", "Encaixe"),
+        Parametro("modo_encaixe", 0, "int", "Modo do encaixe: 0 = NÃO ATRASAR A FILA (o pedido só entra onde não atrasa "
+                  "quem já está na máquina); 1 = ATENDER O PEDIDO (cumpre a data do pedido empurrando a fila). "
+                  "A sequência de formulação é sempre respeitada", "Encaixe"),
         Parametro("salto_micra", 5.0, "float", "Maior diferença de micra entre duas OFs seguidas na máquina; acima "
                   "disso é salto e precisa de OF de estoque de micra intermediária (encaixe e simulação)", "Encaixe"),
         Parametro("encaixar_alternativos", 0, "int", "Encaixe e simulação: 1 = encaixa também os pedidos que a reserva "

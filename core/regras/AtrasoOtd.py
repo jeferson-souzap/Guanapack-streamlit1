@@ -13,7 +13,8 @@ Situação (coluna atraso_otd):
                  (o BI mostra só o mês corrente; meses anteriores ficam "OK").
 - "VAI ATRASAR": a data OTD ainda não chegou, mas o final previsto da OF passa dela.
 - "OK":          nos demais casos, inclusive pedido sem OF no planejamento (atendido por estoque
-                 ou ainda sem programação) e cancelado. O BI também não mostra esses.
+                 ou ainda sem programação), cancelado e fechado sem faturamento (FECHADO). O BI também não
+                 mostra esses.
 Pedido produzido (peso_prod > 0): o fim da produção é a prev_prod do CTLR.
 Pedido em aberto: precisa ter OF na planejamento (pedido + seq_prog); vale o maior final_prev.
 
@@ -109,7 +110,7 @@ def calcular_atraso_otd(ctlr: pd.DataFrame, plan: pd.DataFrame, hoje=None) -> pd
     terminou = of["todas_terminadas"].fillna(False).astype(bool) & of["final_real"].notna()
 
     situacao = pd.Series(OK, index=df.index)
-    valido = embarque.notna() & ~df["status_pedido"].isin(["CANCELADO", "NF ANULADA"])
+    valido = embarque.notna() & ~df["status_pedido"].isin(["CANCELADO", "NF ANULADA", "FECHADO"])
 
     # Já produzido: compara o fim real (prev_prod) com a data OTD, só no mês corrente
     prod_atrasado = valido & produzido & prev_prod.notna() & mes_atual & (prev_prod > otd)

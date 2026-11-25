@@ -186,3 +186,51 @@ def test_agrupar_ordena_a_micra_dentro_do_grupo():
     cen = cenario(ofs, [], RegrasCenario(prioridade=FORMULACAO, salto_micra=5))
     # última fixa 23 está mais perto de 30 que de 12: o MN desce (30, 17, 12); depois o MO sobe a partir de 12
     assert list(cen.itens["micra"]) == [20, 20, 23, 30, 17, 12, 25, 35]
+
+
+# ----- avaliação da programação (25/11/2026) -----
+def _fila_com_atrasada(dt_otd_of5, dt_otd_of3=None):
+    """3 fixas | OF 3 | OF 4 (estoque) | OF 5 do pedido 105, atrasada no fim da fila (termina 12/11 12h)."""
+    ofs = [of_form(i, 10 * i, "MN 250%") for i in range(6)]
+    ofs[5].update(pedido=105, seq_prog=1, dt_otd=pd.Timestamp(dt_otd_of5))
+    if dt_otd_of3:
+        ofs[3].update(pedido=103, seq_prog=1, dt_otd=pd.Timestamp(dt_otd_of3))
+    return ofs
+
+
+def test_avaliacao_boa_sem_atraso():
+    from core.regras.SimulacaoProgramacao import BOA, avaliar_programacao
+    av = avaliar_programacao(cenario([of_form(i, 10 * i, "MN 250%") for i in range(5)], []))
+    assert av.situacao == BOA and av.nota == 100 and av.plano.empty and av.continuam.empty
+
+
+def test_avaliacao_monta_plano_que_recupera_a_atrasada():
+    from core.regras.SimulacaoProgramacao import ATENCAO, JA_ATRASADA, OK, aplicar_plano, avaliar_programacao
+    cen = cenario(_fila_com_atrasada("2026-11-11"), [])
+    assert cen.itens.set_index("chave").loc["OF 5", "atraso"] == JA_ATRASADA
+    av = avaliar_programacao(cen)
+    assert av.situacao == ATENCAO
+    p = av.plano.iloc[0]
+    assert (p.chave, p.para_maquina, p.para_ordem, bool(p.sai_do_atraso)) == ("OF 5", "Power", 4, True)
+    assert av.continuam.empty and av.depois["recuperadas"] == 1
+    aplicar_plano(cen, av.plano)
+    it = cen.itens.set_index("chave")
+    assert it.loc["OF 5", "atraso"] == OK and it.loc["OF 5", "ordem"] == 4
+    assert indicadores(cen)["fora_do_prazo"] == 0
+
+
+def test_avaliacao_nao_atrasa_quem_esta_no_prazo():
+    from core.regras.SimulacaoProgramacao import avaliar_programacao
+    # OF 3 tem data OTD 11/11 e termina 11/11 16h: a OF 5 não pode passar na frente dela;
+    # passa só na frente da OF 4 (estoque), o que diminui o atraso mas não tira do atraso
+    cen = cenario(_fila_com_atrasada("2026-11-11", dt_otd_of3="2026-11-11"), [])
+    av = avaliar_programacao(cen)
+    p = av.plano.iloc[0]
+    assert p.para_ordem == 5 and not p.sai_do_atraso and p.atraso_antes_h == 12 and p.atraso_depois_h == 2
+    assert list(av.continuam.chave) == ["OF 5"] and av.continuam.motivo.iloc[0].startswith("dá tempo")
+
+
+def test_avaliacao_atrasada_sem_tempo_nem_como_primeira():
+    from core.regras.SimulacaoProgramacao import avaliar_programacao
+    av = avaliar_programacao(cenario(_fila_com_atrasada("2026-11-10"), []))
+    assert av.continuam.motivo.iloc[0].startswith("nem como a 1ª")

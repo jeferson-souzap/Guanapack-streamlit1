@@ -21,12 +21,18 @@ if ent is None:
 MAQUINAS = [r["apelido"] for r in ent["regras"]]
 ROTULO_SEQ = {S.NAO_QUEBRAR: "Não quebrar", S.PODE_QUEBRAR: "Pode quebrar (só se precisar)", S.IGNORAR: "Ignorar"}
 ROTULO_PRI = {S.PRAZO: "Respeitar as datas (prazo OTD)", S.FORMULACAO: "Agrupar por formulação (ignora as datas)"}
+MODOS = list(S.EncaixeMaquinas.MODOS_ENCAIXE)
+ROTULO_MODO = {MODOS[0]: "1.1 Não atrasar o que já está na máquina", MODOS[1]: "1.2 Atender o pedido empurrando a fila"}
 
 # ------------------------------------------------------------------ regras do cenário
 with st.form("sim_regras"):
     st.markdown("**Regras do cenário**")
-    a, b, d = st.columns(3)
+    a, m, b, d = st.columns([1, 1.3, 1.3, 1.4])
     seq = a.radio("Sequência de formulação", list(ROTULO_SEQ), format_func=ROTULO_SEQ.get)
+    modo = m.radio("Encaixe dos pedidos novos", MODOS, format_func=ROTULO_MODO.get,
+                   index=1 if int(c.params.get("modo_encaixe", 0)) else 0,
+                   help="1.1: o pedido só entra onde nenhuma OF da máquina passa da data OTD. 1.2: o pedido cumpre a "
+                        "data dele empurrando a fila (atrasando o mínimo).")
     pri = b.radio("O que manda na fila", list(ROTULO_PRI), format_func=ROTULO_PRI.get)
     maqs = d.multiselect("Máquinas", MAQUINAS, default=MAQUINAS)
     e, f, g, i, h = st.columns(5)
@@ -48,7 +54,7 @@ with st.form("sim_regras"):
 regras = S.RegrasCenario(sequencia=seq, prioridade=pri, ordens_fixas=int(fixas), prioritarios=prior,
                          setup_min=float(setup), maquinas=maqs if len(maqs) < len(MAQUINAS) else [],
                          fator_kgh=fator / 100, salto_micra=float(salto),
-                         encaixar_alternativos=bool(alternativos))
+                         encaixar_alternativos=bool(alternativos), modo=modo)
 
 
 def _novo_cenario():
@@ -104,7 +110,49 @@ def _tabela_tela(df: pd.DataFrame) -> pd.DataFrame:
               "nivel_formulacao", "micra", "qtde_kg", "inicio", "fim", "data_otd", "atraso", "empurrado_h", "salto_micra", "alerta", "roda_em"]]
 
 
-aba_fila, aba_graf, aba_cen = st.tabs(["Ajustar a fila", "Gráfico", "Cenários salvos"])
+aba_aval, aba_fila, aba_graf, aba_cen = st.tabs(["Avaliação", "Ajustar a fila", "Gráfico", "Cenários salvos"])
+
+# ------------------------------------------------------------------ avaliação
+with aba_aval:
+    st.caption("Diz se a programação deste cenário está boa e monta um plano de mudanças que tira OFs do atraso "
+               "(ou diminui as horas de atraso) sem fazer nenhuma OF que está no prazo atrasar, respeitando a "
+               "sequência de formulação, as máquinas que rodam o produto e as OFs fixas e travadas.")
+    versao = st.session_state.get("sim_versao", 0)
+    guardada = st.session_state.get("sim_aval")
+    if guardada is None or guardada[0] != versao:
+        with st.spinner("Avaliando a programação…"):
+            st.session_state["sim_aval"] = guardada = (versao, S.avaliar_programacao(cen))
+    av: S.Avaliacao = guardada[1]
+    cor = {S.BOA: "green", S.ATENCAO: "orange", S.RUIM: "red"}[av.situacao]
+    v1, v2, v3, v4 = st.columns(4)
+    v1.markdown(f"### :{cor}[Programação {av.situacao}]")
+    v2.metric("Nota", f"{av.nota} / 100", help="100 − 25 por prioritário fora do prazo − 10 por OF que passa a "
+                                                "atrasar − 5 por pedido novo que não atende − 3 por OF já atrasada − "
+                                                "3 por pedido no meio de sequência − 1 por salto de micra")
+    v3.metric("Horas de atraso", f"{av.depois['horas_atraso_antes']:.0f} h",
+              delta=f"{av.depois['horas_atraso_depois'] - av.depois['horas_atraso_antes']:.0f} h com o plano",
+              delta_color="inverse", help="soma das horas de atraso das OFs fora do prazo")
+    v4.metric("OFs que o plano tira do atraso", av.depois["recuperadas"],
+              help=f"de {av.antes.get('fora_do_prazo', 0)} fora do prazo")
+    st.markdown("**Por quê**\n" + "\n".join(f"- {m}" for m in av.motivos))
+    if av.sugestoes:
+        st.markdown("**O que pode melhorar**\n" + "\n".join(f"- {m}" for m in av.sugestoes))
+    if not av.plano.empty:
+        st.markdown("**Plano de melhoria** (um passo depois do outro; a ordem é a posição na máquina no momento do passo)")
+        st.dataframe(av.plano, hide_index=True, width="stretch",
+                     column_config={"sai_do_atraso": st.column_config.CheckboxColumn("sai do atraso"),
+                                    "prioritario": st.column_config.CheckboxColumn("prioritário")})
+        p1, p2 = st.columns([1, 3])
+        ate = p2.number_input("Aplicar até o passo", 1, len(av.plano), len(av.plano), key=f"sim_ate_{versao}")
+        if p1.button("Aplicar o plano", type="primary", width="stretch"):
+            st.session_state["sim_hist"].append(copy.deepcopy(cen))
+            st.session_state["sim_avisos"] = S.aplicar_plano(cen, av.plano, int(ate))
+            st.session_state["sim_versao"] += 1
+            st.rerun()
+    if not av.continuam.empty:
+        st.markdown("**OFs que continuam atrasadas**")
+        st.dataframe(av.continuam, hide_index=True, width="stretch",
+                     column_config={"prioritario": st.column_config.CheckboxColumn("prioritário")})
 
 # ------------------------------------------------------------------ ajustar a fila
 with aba_fila:
